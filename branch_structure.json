@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "main",
+    "origin",
+    "test/1235-wallet-context-boundary-recovery"
+  ],
+  "parent": {
+    "main": null,
+    "origin": "main",
+    "test/1235-wallet-context-boundary-recovery": "main"
+  },
+  "order": [
+    "main",
+    "origin",
+    "test/1235-wallet-context-boundary-recovery"
+  ]
+}
