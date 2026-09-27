@@ -204,8 +204,11 @@ export default function ErrorState({
   hideHeading = false,
   ariaLabel,
 }: ErrorStateProps) {
-  const resolvedSeverity = severity ?? DEFAULT_SEVERITY[type]
-  const copy = ERROR_COPY[type]
+  const resolvedSeverity = severity ?? DEFAULT_SEVERITY[type] ?? DEFAULT_SEVERITY['generic']
+  // Guard against unrecognised `type` values (e.g. a future API error code
+  // passed at runtime before the type union is updated). Fall back to the
+  // 'generic' copy deck so the component never throws on an unknown kind.
+  const copy = ERROR_COPY[type] ?? ERROR_COPY['generic']
   const showHeading = !hideHeading && title !== ''
   const resolvedTitle = showHeading ? (title ?? copy.title) : undefined
   const resolvedMessage = message ?? copy.message
@@ -223,7 +226,7 @@ export default function ErrorState({
       data-error-kind={type}
       data-error-severity={resolvedSeverity}
     >
-      <div className="error-state__icon">{icon ?? ERROR_ICONS[type]}</div>
+      <div className="error-state__icon">{icon ?? ERROR_ICONS[type] ?? ERROR_ICONS['generic']}</div>
       {resolvedTitle && <h3 className="error-state__title">{resolvedTitle}</h3>}
       <p className={`error-state__message${action ? ' error-state__message--has-action' : ''}`}>
         {resolvedMessage}
