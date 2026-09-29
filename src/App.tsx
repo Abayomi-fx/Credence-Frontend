@@ -1,13 +1,16 @@
-import { lazy, Suspense, type ReactNode } from 'react'
+import { lazy, Suspense, useState, useCallback, useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { SettingsProvider } from './context/SettingsContext'
-import { WalletProvider } from './context/WalletContext'
+import { WalletProvider, useWallet } from './context/WalletContext'
 import ToastProvider from './components/ToastProvider'
 import ErrorBoundary from './components/ErrorBoundary'
 import Layout from './components/Layout'
 import BreakpointOverlay from './components/dev/BreakpointOverlay'
 import DebugOverlay from './components/dev/DebugOverlay'
 import { WidgetCacheProvider } from './widgetCache'
+import { MutationRecoveryProvider } from './components/MutationRecoveryProvider'
+import LoadingSkeleton from './components/states/LoadingSkeleton'
+import ReauthPrompt from './components/ReauthPrompt'
 
 const Home = lazy(() => import('./pages/Home'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -25,13 +28,61 @@ const NotFound = lazy(() => import('./pages/NotFound'))
 
 const ToastTest = import.meta.env.DEV ? lazy(() => import('./pages/ToastTest')) : null
 
-export interface AppProps {
-  /** Optional custom subtree to render instead of default Routes for testing and boundary harnesses. */
-  children?: ReactNode
-  /** Optional custom error fallback for the route ErrorBoundary. */
-  errorFallback?: (error: Error, reset: () => void) => ReactNode
-  /** Optional custom loading fallback for the route Suspense boundary. */
-  loadingFallback?: ReactNode
+function AppRouter() {
+  const { isReauthRequired, reauth, connected } = useWallet()
+  const [showReauth, setShowReauth] = useState(false)
+
+  useEffect(() => {
+    if (connected && isReauthRequired()) {
+      setShowReauth(true)
+    }
+  }, [connected, isReauthRequired])
+
+  const handleReauthConfirm = useCallback(async () => {
+    await reauth()
+    setShowReauth(false)
+  }, [reauth])
+
+  const handleReauthCancel = useCallback(() => {
+    setShowReauth(false)
+  }, [])
+
+  return (
+    <>
+      <ErrorBoundary>
+        <Suspense fallback={<LoadingSkeleton variant="dashboard" />}>
+          <Routes>
+            <Route path="/" element={<Layout />}>
+              <Route index element={<Home />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="bond" element={<Bond />} />
+              <Route path="bond/new" element={<CreateBondPage />} />
+              <Route path="bond/:id" element={<BondDetail />} />
+              <Route path="trust" element={<TrustScore />} />
+              <Route path="trust/summary" element={<TrustSummary />} />
+              <Route path="attestations" element={<Attestations />} />
+              <Route path="transactions" element={<Transactions />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="test-amount-input" element={<AmountInputTestPage />} />
+              <Route path="signin" element={<SignIn />} />
+              {import.meta.env.DEV && ToastTest && (
+                <Route path="dev/toasts" element={<ToastTest />} />
+              )}
+              <Route path="*" element={<NotFound />} />
+            </Route>
+          </Routes>
+        </Suspense>
+        <BreakpointOverlay />
+        <DebugOverlay />
+      </ErrorBoundary>
+
+      <ReauthPrompt 
+        open={showReauth}
+        onConfirm={handleReauthConfirm}
+        onCancel={handleReauthCancel}
+      />
+    </>
+  )
 }
 
 /**
@@ -57,42 +108,9 @@ export function App({ children, errorFallback, loadingFallback }: AppProps = {})
         <SettingsProvider>
           <ToastProvider>
             <WalletProvider>
-              <ErrorBoundary fallback={errorFallback}>
-                <Suspense
-                  fallback={
-                    loadingFallback ?? (
-                      <div role="status" aria-live="polite">
-                        Loading...
-                      </div>
-                    )
-                  }
-                >
-                  {children ?? (
-                    <Routes>
-                      <Route path="/" element={<Layout />}>
-                        <Route index element={<Home />} />
-                        <Route path="dashboard" element={<Dashboard />} />
-                        <Route path="bond" element={<Bond />} />
-                        <Route path="bond/new" element={<CreateBondPage />} />
-                        <Route path="bond/:id" element={<BondDetail />} />
-                        <Route path="trust" element={<TrustScore />} />
-                        <Route path="trust/summary" element={<TrustSummary />} />
-                        <Route path="attestations" element={<Attestations />} />
-                        <Route path="transactions" element={<Transactions />} />
-                        <Route path="settings" element={<Settings />} />
-                        <Route path="test-amount-input" element={<AmountInputTestPage />} />
-                        <Route path="signin" element={<SignIn />} />
-                        {import.meta.env.DEV && ToastTest && (
-                          <Route path="dev/toasts" element={<ToastTest />} />
-                        )}
-                        <Route path="*" element={<NotFound />} />
-                      </Route>
-                    </Routes>
-                  )}
-                </Suspense>
-                <BreakpointOverlay />
-                <DebugOverlay />
-              </ErrorBoundary>
+              <MutationRecoveryProvider>
+                <AppRouter />
+              </MutationRecoveryProvider>
             </WalletProvider>
           </ToastProvider>
         </SettingsProvider>
