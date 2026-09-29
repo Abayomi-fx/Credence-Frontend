@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useScrollPreserver } from '../hooks/useScrollPreserver'
 import Button from './Button'
+import Banner from './Banner'
 import './ConfirmDialog.css'
 
 const DEFAULT_CONFIRM_PHRASE = 'CONFIRM'
@@ -34,7 +35,7 @@ export interface ConfirmDialogProps {
    * React children slot for custom content in the dialog body.
    */
   children?: React.ReactNode
-  onConfirm: () => void
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
   returnFocusRef?: RefObject<HTMLElement | null>
   confirmLabel?: string
@@ -57,6 +58,14 @@ export interface ConfirmDialogProps {
    * Reset to `false` once the async operation settles (success or error).
    */
   isSubmitting?: boolean
+  /** External error to display. If onConfirm returns a Promise that rejects, ConfirmDialog will display the rejection error automatically. */
+  error?: React.ReactNode
+  /** If true, indicates the data is stale and submission should be blocked. */
+  isStale?: boolean
+  /** If set, indicates a permission error and blocks submission. */
+  permissionError?: React.ReactNode
+  /** Called when the user clicks Retry after a failure. If omitted, the confirm button acts as retry. */
+  onRetry?: () => void
 }
 
 export default function ConfirmDialog({
@@ -76,6 +85,10 @@ export default function ConfirmDialog({
   confirmPhrase = DEFAULT_CONFIRM_PHRASE,
   confirmHint = DEFAULT_CONFIRM_HINT,
   isSubmitting = false,
+  error = null,
+  isStale = false,
+  permissionError = null,
+  onRetry,
 }: ConfirmDialogProps) {
   const { t } = useTranslation()
   const titleId = useId()
@@ -87,6 +100,12 @@ export default function ConfirmDialog({
   const [confirmText, setConfirmText] = useState('')
   const [announcement, setAnnouncement] = useState('')
   const [prevConfirmEnabled, setPrevConfirmEnabled] = useState(false)
+  const [internalSubmitting, setInternalSubmitting] = useState(false)
+  const [internalError, setInternalError] = useState<string | null>(null)
+
+  const loading = isSubmitting || internalSubmitting
+  const displayError = error || internalError
+  const isSubmissionBlocked = isStale || !!permissionError
 
   const handleCancel = useCallback(() => {
     onCancel()
@@ -107,6 +126,8 @@ export default function ConfirmDialog({
       setConfirmText('')
       setAnnouncement('')
       setPrevConfirmEnabled(false)
+      setInternalSubmitting(false)
+      setInternalError(null)
       return
     }
 
@@ -114,7 +135,7 @@ export default function ConfirmDialog({
     setAnnouncement(message)
   }, [open, title, subtitle])
 
-  const isConfirmEnabled = confirmText === confirmPhrase
+  const isConfirmEnabled = confirmText === confirmPhrase && !isSubmissionBlocked
 
   useEffect(() => {
     if (isConfirmEnabled !== prevConfirmEnabled) {
@@ -131,13 +152,31 @@ export default function ConfirmDialog({
     }
   }, [isConfirmEnabled, prevConfirmEnabled, confirmPhrase, t])
 
-  const handleConfirm = () => {
-    if (!isConfirmEnabled) return
-    onConfirm()
+  const handleConfirm = async () => {
+    if (!isConfirmEnabled || loading) return
+    
+    if (displayError && onRetry) {
+      setInternalError(null)
+      onRetry()
+      return
+    }
+
+    setInternalError(null)
+    try {
+      const result = onConfirm()
+      if (result instanceof Promise) {
+        setInternalSubmitting(true)
+        await result
+      }
+    } catch (err) {
+      setInternalError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setInternalSubmitting(false)
+    }
   }
 
   const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (isSubmitting) return
+    if (loading) return
     if (event.target === event.currentTarget) {
       handleCancel()
     }
@@ -168,6 +207,24 @@ export default function ConfirmDialog({
         </header>
 
         <div id={descId} className="confirm-dialog__body">
+          {permissionError && (
+            <Banner severity="incident" title="Permission Denied">
+              {permissionError}
+            </Banner>
+          )}
+
+          {isStale && !permissionError && (
+            <Banner severity="warn" title="Stale Data">
+              The information below may be out of date. Please refresh and try again.
+            </Banner>
+          )}
+
+          {displayError && !permissionError && (
+            <Banner severity="incident" title="Submission Failed">
+              {displayError}
+            </Banner>
+          )}
+
           {breakdown ? (
             <dl className="confirm-dialog__breakdown">
               <div className="confirm-dialog__breakdown-row">
@@ -214,6 +271,7 @@ export default function ConfirmDialog({
               spellCheck={false}
               aria-required="true"
               placeholder={confirmPhrase}
+              disabled={isSubmissionBlocked}
             />
             <p className="confirm-dialog__confirm-hint">{confirmInputHint || confirmHint}</p>
           </div>
@@ -225,7 +283,7 @@ export default function ConfirmDialog({
             type="button"
             variant="secondary"
             onClick={handleCancel}
-            disabled={isSubmitting}
+            disabled={loading}
           >
             Cancel
           </Button>
@@ -233,12 +291,12 @@ export default function ConfirmDialog({
             ref={confirmRef}
             type="button"
             variant={variant === 'danger' ? 'danger' : 'primary'}
-            disabled={!isConfirmEnabled || isSubmitting}
-            isLoading={isSubmitting}
+            disabled={!isConfirmEnabled || loading || isSubmissionBlocked}
+            isLoading={loading}
             onClick={handleConfirm}
-            aria-disabled={!isConfirmEnabled || isSubmitting}
+            aria-disabled={!isConfirmEnabled || loading || isSubmissionBlocked}
           >
-            {confirmLabel}
+            {displayError ? 'Retry' : confirmLabel}
           </Button>
         </footer>
       </div>
