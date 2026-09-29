@@ -178,8 +178,15 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
   }
 
   const handleBlur = (e: React.FocusEvent) => {
-    // Only resume if focus has genuinely left the toast's bounding box
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+    try {
+      // Only resume if focus has genuinely left the toast's bounding box
+      if (!e.currentTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+        isFocusedRef.current = false
+        updateTimerState()
+      }
+    } catch (error) {
+      // Deterministic failure boundary
+      console.error('Toast handleBlur failure:', error)
       isFocusedRef.current = false
       updateTimerState()
     }

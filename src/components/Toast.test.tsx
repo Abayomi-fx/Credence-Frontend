@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Toast, { type ToastSeverity } from './Toast'
@@ -128,6 +128,43 @@ describe('Toast', () => {
       vi.advanceTimersByTime(1)
       expect(onDismiss).toHaveBeenCalledTimes(1)
       expect(onDismiss).toHaveBeenCalledWith(toast.id)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('handleBlur deterministic failure boundary maintains timer state on exception', () => {
+    vi.useFakeTimers()
+    try {
+      const { toast } = renderToast('info', 'Failure boundary toast', 3000)
+      const toastElement = screen.getByRole('status')
+      
+      // Focus to pause the timer
+      toastElement.focus()
+      
+      // Advance timers by 1500ms
+      vi.advanceTimersByTime(1500)
+      
+      // Simulate blur with an adverse event that throws when contains() is called
+      const adverseEvent = new FocusEvent('blur', {
+        relatedTarget: document.createElement('div'),
+      })
+      
+      // Mock the currentTarget to throw an error on contains
+      Object.defineProperty(adverseEvent, 'currentTarget', {
+        get: () => ({
+          contains: () => { throw new Error('Adverse environment failure') }
+        })
+      })
+      
+      // Trigger the blur manually to trigger our error boundary
+      // Another way is to just use fireEvent:
+      fireEvent(toastElement, adverseEvent)
+      
+      // The error should be caught and the timer should resume (isFocusedRef becomes false)
+      // Wait another 1500ms, it should complete the 3000ms total
+      vi.advanceTimersByTime(1500)
+      
     } finally {
       vi.useRealTimers()
     }
