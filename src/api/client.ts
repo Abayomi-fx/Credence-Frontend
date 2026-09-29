@@ -126,6 +126,7 @@ export class ApiAmountError extends ApiError {
   }
 }
 
+/**
  * Thrown by `apiFetch` when a session identity conflict is detected.
  *
  * A conflict is detected in two places:
@@ -381,7 +382,6 @@ function applyAmountFields(
   return wireBody
 }
 
-function buildHeaders(headers: HeadersInit | undefined, hasJsonBody: boolean): Headers {
 function buildHeaders(
   headers: HeadersInit | undefined,
   hasJsonBody: boolean,
@@ -414,19 +414,65 @@ async function parseResponse(response: Response): Promise<unknown> {
   return text || undefined
 }
 
+/** Maximum length of a server-provided error message we will surface verbatim. */
+const MAX_ERROR_MESSAGE_LENGTH = 500
+
+/**
+ * Extracts a deterministic, safe, user-visible error message from a failed
+ * response payload.
+ *
+ * Invariants:
+ * - Always returns a non-empty string, so callers can rely on
+ *   `new ApiError(status, message)` never producing an empty message.
+ * - Never throws: any shape of `payload` (null, primitives, arrays, objects
+ *   with getters that throw, cyclic structures) resolves to a fallback.
+ * - Never leaks unbounded or control-character-laden server content: string
+ *   messages are trimmed, stripped of control characters, and truncated to
+ *   {@link MAX_ERROR_MESSAGE_LENGTH}. This keeps logs and UI rendering
+ *   deterministic and prevents log-injection / terminal-escape attacks.
+ * - Prefers an explicit `message` string, then a `error` string, then a
+ *   non-empty string payload, then a status-derived fallback.
+ */
 function errorMessage(status: number, payload: unknown): string {
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'message' in payload &&
-    typeof payload.message === 'string'
-  ) {
-    return payload.message
+  const fallback = 'Request failed with status ' + status
+
+  const sanitize = (value: string): string => {
+    // Strip C0/C1 control characters (except tab/newline which we collapse
+    // to spaces) so the message is safe to render and log.
+    // eslint-disable-next-line no-control-regex
+    const stripped = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+    const collapsed = stripped.replace(/[\r\n\t]+/g, ' ').trim()
+    if (!collapsed) return ''
+    return collapsed.length > MAX_ERROR_MESSAGE_LENGTH
+      ? collapsed.slice(0, MAX_ERROR_MESSAGE_LENGTH) + '…'
+      : collapsed
   }
-  if (typeof payload === 'string' && payload.trim()) {
-    return payload
+
+  const readStringField = (source: unknown, key: string): string | undefined => {
+    if (!source || typeof source !== 'object') return undefined
+    let raw: unknown
+    try {
+      raw = (source as Record<string, unknown>)[key]
+    } catch {
+      return undefined
+    }
+    if (typeof raw !== 'string') return undefined
+    const cleaned = sanitize(raw)
+    return cleaned || undefined
   }
-  return 'Request failed with status ' + status
+
+  const fromMessage = readStringField(payload, 'message')
+  if (fromMessage) return fromMessage
+
+  const fromError = readStringField(payload, 'error')
+  if (fromError) return fromError
+
+  if (typeof payload === 'string') {
+    const cleaned = sanitize(payload)
+    if (cleaned) return cleaned
+  }
+
+  return fallback
 }
 
 function requestFingerprint(
@@ -470,19 +516,18 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   // caller's body object.
   const wireBody = applyAmountFields(body, amountFields)
   const hasJsonBody = isJsonBody(wireBody)
-  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, ...init } = options
-  const hasJsonBody = isJsonBody(body)
+  const { idempotencyKey, identityEpoch } = options
 
   // Validate input size before expensive operations. Serializing an oversized
   // body is wasted work and could exhaust memory or downstream resources.
   if (hasJsonBody) {
-    const serialized = JSON.stringify(body)
+    const serialized = JSON.stringify(wireBody)
     if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BODY_BYTES) {
       throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serialized.length })
     }
   }
 
-  const serializedBody = hasJsonBody ? JSON.stringify(body) : (body ?? undefined)
+  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
   const correlationId = generateCorrelationId('api-fetch')
   const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
@@ -579,8 +624,6 @@ async function apiFetchWithoutReplay<T>(
   try {
     response = await fetch(url, {
       ...init,
-      headers: buildHeaders(headers, hasJsonBody),
-      body: hasJsonBody ? JSON.stringify(wireBody) : wireBody,
       headers,
       body: serializedBody,
     })
