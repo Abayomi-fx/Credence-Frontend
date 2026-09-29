@@ -339,3 +339,44 @@ describe('pointsToNextTier - failure boundaries', () => {
     }
   })
 })
+
+// --- Boundary and Recovery States ---
+describe('TrustGauge boundary and recovery states', () => {
+  it('renders permission denied overlay when hasPermission is false', () => {
+    render(<TrustGauge score={500} tier="gold" hasPermission={false} />)
+    expect(screen.getByText('You do not have permission to view this data.')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('renders error overlay and retry button', () => {
+    const onRetry = vi.fn()
+    const error = new Error('Failed to load trust score')
+    render(<TrustGauge score={500} tier="gold" error={error} onRetry={onRetry} />)
+    
+    expect(screen.getByText('Error: Failed to load trust score')).toBeInTheDocument()
+    const retryButton = screen.getByRole('button', { name: 'Retry' })
+    expect(retryButton).toBeInTheDocument()
+    
+    retryButton.click()
+    expect(onRetry).toHaveBeenCalled()
+  })
+
+  it('renders loading overlay', () => {
+    render(<TrustGauge score={500} tier="gold" isLoading={true} />)
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toBeInTheDocument()
+  })
+
+  it('renders stale banner when isStale is true', () => {
+    render(<TrustGauge score={500} tier="gold" isStale={true} />)
+    expect(screen.getByText('Data may be out of date')).toBeInTheDocument()
+  })
+
+  it('does not render stale banner if loading or error', () => {
+    const { rerender } = render(<TrustGauge score={500} tier="gold" isStale={true} isLoading={true} />)
+    expect(screen.queryByText('Data may be out of date')).not.toBeInTheDocument()
+
+    rerender(<TrustGauge score={500} tier="gold" isStale={true} error={new Error('test')} />)
+    expect(screen.queryByText('Data may be out of date')).not.toBeInTheDocument()
+  })
+})
