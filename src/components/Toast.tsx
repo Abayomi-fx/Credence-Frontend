@@ -82,8 +82,9 @@ interface ToastProps {
 
 export default function Toast({ toast, onDismiss }: ToastProps) {
   const { durationMs = 0 } = toast
+  const safeDurationMs = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0
   const [progress, setProgress] = useState(100)
-  const remainingTimeRef = useRef(durationMs)
+  const remainingTimeRef = useRef(safeDurationMs)
   const lastResumeTimeRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
   const progressTimerRef = useRef<number | null>(null)
@@ -103,18 +104,18 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
   }, [])
 
   const updateProgress = useCallback(() => {
-    if (durationMs <= 0 || remainingTimeRef.current <= 0) {
+    if (safeDurationMs <= 0 || remainingTimeRef.current <= 0) {
       setProgress(0)
       return
     }
 
-    const percent = (remainingTimeRef.current / durationMs) * 100
-    setProgress(Math.max(0, percent))
-  }, [durationMs])
+    const percent = (remainingTimeRef.current / safeDurationMs) * 100
+    setProgress(Math.max(0, Math.min(100, percent)))
+  }, [safeDurationMs])
 
   const startTimer = useCallback(() => {
     // Bypassed for danger severity or autoDismiss='off'
-    if (durationMs <= 0 || remainingTimeRef.current <= 0) return
+    if (safeDurationMs <= 0 || remainingTimeRef.current <= 0) return
     clearTimer()
     lastResumeTimeRef.current = Date.now()
     timerRef.current = window.setTimeout(() => {
@@ -127,7 +128,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
       const remaining = Math.max(0, remainingTimeRef.current - elapsed)
       remainingTimeRef.current = remaining
       lastResumeTimeRef.current = Date.now()
-      setProgress((remaining / durationMs) * 100)
+      setProgress(Math.max(0, Math.min(100, (remaining / safeDurationMs) * 100)))
 
       if (remaining <= 0) {
         clearTimer()
@@ -135,10 +136,10 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
       }
     }, 100)
     updateProgress()
-  }, [durationMs, onDismiss, toast.id, clearTimer, updateProgress])
+  }, [safeDurationMs, onDismiss, toast.id, clearTimer, updateProgress])
 
   const pauseTimer = useCallback(() => {
-    if (durationMs <= 0) return
+    if (safeDurationMs <= 0) return
     clearTimer()
     if (lastResumeTimeRef.current !== null) {
       const elapsed = Date.now() - lastResumeTimeRef.current
@@ -146,7 +147,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
       lastResumeTimeRef.current = null
     }
     updateProgress()
-  }, [durationMs, clearTimer, updateProgress])
+  }, [safeDurationMs, clearTimer, updateProgress])
 
   const updateTimerState = useCallback(() => {
     if (isHoveredRef.current || isFocusedRef.current) {
@@ -187,14 +188,15 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
 
   return (
     <div
-      className={`toast toast--${toast.severity}`}
+      className={`toast toast--${toást.severity}`}
+      data-toast-id={toast.id}
       role={toast.severity === 'danger' ? 'alert' : 'status'}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onFocus={handleFocus}
       onBlur={handleBlur}
     >
-      {durationMs > 0 && (
+      {safeDurationMs > 0 && (
         <div
           className="toast__progress"
           role="progressbar"
@@ -220,7 +222,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
       </div>
       <div className="toast__content">
         <span className="toast__message">{toast.message}</span>
-        {toast.txHash && (
+        {typeof toast.txHash === 'string' && toast.txHash && (
           <div className="toast__action">
             <span className="toast__tx-hash">{truncateAddress(toast.txHash)}</span>
             <a
