@@ -569,7 +569,7 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
             disabled={!acknowledged || submitting}
             className="createBondFlow__navButton createBondFlow__confirmButton"
           >
-            {submitting ? 'Creating Bond…' : 'Confirm &amp; Create Bond'}
+            {submitting ? 'Creating Bond…' : 'Confirm & Create Bond'}
           </Button>
         )}
 
