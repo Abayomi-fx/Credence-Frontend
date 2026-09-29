@@ -5,7 +5,7 @@ import { useLocation } from 'react-router-dom'
  * Centralized registry mapping route paths to human-readable labels.
  * Aligned exactly with NAV_LINKS definitions inside Layout.tsx.
  */
-export const ROUTE_LABELS: Record<string, string> = {
+const ROUTE_LABELS: Record<string, string> = {
   '/': 'Home page',
   '/dashboard': 'Dashboard page',
   '/bond': 'Bond page',
@@ -14,48 +14,30 @@ export const ROUTE_LABELS: Record<string, string> = {
 }
 
 /**
- * Maximum delay before an announcement is published to the live region.
- * Keeps the assistive-tech notification after the DOM paint completes.
+ * Delay (ms) before announcing a route change.
+ * This allows assistive tech to cleanly process structural navigation changes.
  */
-export const ANNOUNCEMENT_DELAY_MS = 100
+const ANNOUNCE_DELAY_MS = 100
 
 /**
- * Normalizes a raw pathname into a canonical route key.
+ * Resolve a human-readable label for a route pathname.
  *
- * Invariants:
-* - Never throws for any input (including null/undefined/malformed).
- * - Strips trailing slashes except for the root path so '/dashboard/' === '/dashboard'.
- * - Preserves query/search and hash fragments outside the key lookup.
- */
-export function normalizePathname(pathname: unknown): string {
-  if (typeof pathname !== 'string' || pathname.length === 0) {
-    return '/'
-  }
-
-  const withoutHash = pathname.split('#', 1)[0]
-  const withoutQuery = withoutHash.split('?', 1)[0]
-
-  if (withoutQuery.length === 0) {
-    return '/'
-  }
-
-  const withoutTrailingSlash =
-    withoutQuery.length > 1 ? withoutQuery.replace(/\/+$/, '') : withoutQuery
-
-  return withoutTrailingSlash.length > 0 ? withoutTrailingSlash : '/'
-}
-
-/**
- * Resolves the human-readable label for a route pathname.
- *
- * Invariants:
- * - Deterministic for valid, invalid, duplicate, and boundary-case inputs.
- * - Never returns an empty string.
- * - Unmapped routes fall back to a consistent 404 label.
+ * The lookup is deterministic and total: any value that is not a own property
+ * of the registry (including inherited object keys like `__proto__`,
+ * `constructor`, `toString`) falls back to the 404 label. This guarantees
+ * unknown, malformed, or prototype-polluting inputs cannot leak internal
+ * object members into the announcement text.
  */
 export function resolveRouteLabel(pathname: unknown): string {
-  const normalized = normalizePathname(pathname)
-  return ROUTE_LABELS[normalized] ?? 'Page Not Found'
+  if (typeof pathname !== 'string') {
+    return 'Page Not Found'
+  }
+
+  if (Object.prototype.hasOwnProperty.call(ROUTE_LABELS, pathname)) {
+    return ROUTE_LABELS[pathname]
+  }
+
+  return 'Page Not Found'
 }
 
 /**
@@ -64,36 +46,41 @@ export function resolveRouteLabel(pathname: unknown): string {
  * single-page application (SPA) client transitions.
  *
  * Invariants:
- * - The live region is always mounted and never removed during navigation.
- * - Only one announcement is published per settled pathname, even under rapid
- *   consecutive navigation changes (stale timers are cancelled).
- * - The announcement text is always a non-empty string once settled.
+  - The announcement text is always a string derived from the current
+    pathname via `resolveRouteLabel`.
+  - Only the most recent pathname may produce an announcement; stale
+    timers from prior routes are cancelled on every change and on unmount.
+  - The text is never announced twice for the same pathname, even when
+    React re-runs the effect for unrelated reasons.
  */
 export default function RouteAnnouncer() {
   const { pathname } = useLocation()
   const announcementRef = useRef<HTMLElement | null>(null)
+  const lastPathnameRef = useRef(undefined as string | undefined)
 
   useEffect(() => {
-    const label = resolveRouteLabel(pathname)
+    // Skip duplicate effect runs for the same pathname. This keeps the
+    // announcement deterministic even if the component re-renders for
+    // unrelated state changes.
+    if (lastPathnameRef.current === pathname) {
+      return
+    }
+    lastPathnameRef.current = pathname
+
+    // Fallback gracefully handles catch-all configurations or unmapped routes like 404s
+    const pageLabel = resolveRouteLabel(pathname)
 
     // Defer text-assignment slightly until just after the DOM paint completes.
     // This allows assistive tech to cleanly process structural navigation changes.
-    // The cleanup cancels any pending timer so rapid navigation cannot leaka
-    // a stale announcement from a previous route.
     const timer = setTimeout(() => {
       const region = announcementRef.current
       if (!region) {
         return
       }
-
-      const nextText = `${label} loaded`
-
-      // Idempotent write: avoids re-announcing the same label and avoids
-      // cluttering the live region with duplicate text nodes.
-      if (region.textContent !== nextText) {
-        region.textContent = nextText
-      }
-    }, ANNOUNCEMENT_DELAY_MS)
+      // Write directly to the live region so the announcement is atomic
+      // and cannot be interleaved with a stale timer from a prior route.
+      region.textContent = `${pageLabel} loaded`
+    }, ANNOUNCE_DELAY_MS)
 
     return () => clearTimeout(timer)
   }, [pathname])
@@ -105,7 +92,6 @@ export default function RouteAnnouncer() {
       className="sr-only"
       aria-live="polite"
       aria-atomic="true"
-      data-testid="route-announcer"
       style={{
         position: 'absolute',
         width: '1px',

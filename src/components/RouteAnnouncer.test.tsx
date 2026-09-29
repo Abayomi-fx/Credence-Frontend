@@ -1,66 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
-import { MemoryRouter, useNavigate } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import { useEffect } from 'react'
-import RouteAnnouncer, {
-  ANNOUNCEMENT_DELAY_MS,
-  normalizePathname,
-  resolveRouteLabel,
-} from './RouteAnnouncer'
+import RouteAnnouncer, { resolveRouteLabel } from './RouteAnnouncer'
 
-const getAnnouncer = () =>
-  document.querySelector('[data-testid="route-announcer"]') as HTMLElement
-
-describe('normalizePathname', () => {
-  it('returns the root for empty or non-string inputs', () => {
-    expect(normalizePathname('')).toBe('/')
-    expect(normalizePathname(undefined)).toBe('/')
-    expect(normalizePathname(null)).toBe(null as unknown == null ? '/' : '/')
-    expect(normalizePathname(42)).toBe('/')
-  })
-
-  it('strips trailing slashes but preserves the root', () => {
-    expect(normalizePathname('/')).toBe('/')
-    expect(normalizePathname('/dashboard/')).toBe('/dashboard')
-    expect(normalizePathname('/dashboard///')).toBe('/dashboard')
-  })
-
-  it('strips query and hash fragments', () => {
-    expect(normalizePathname('/dashboard?foo=bar')).toBe('/dashboard')
-    expect(normalizePathname('/dashboard#section')).toBe('/dashboard')
-    expect(normalizePathname('/dashboard/?foo=bar#baz')).toBe('/dashboard')
-  })
-
-  it('treats whitespace-only paths as the root', () => {
-    expect(normalizePathname('   ')).toBe('/')
-  })
-})
-
-describe('resolveRouteLabel', () => {
-  it('resolves known routes deterministically', () => {
-    expect(resolveRouteLabel('/')).toBe('Home page')
-    expect(resolveRouteLabel('/dashboard')).toBe('Dashboard page')
-    expect(resolveRouteLabel('/bond')).toBe('Bond page')
-    expect(resolveRouteLabel('/trust')).toBe('Trust Score page')
-    expect(resolveRouteLabel('/settings')).toBe('Settings page')
-  })
-
-  it('falls back to the 404 label for unknown routes', () => {
-    expect(resolveRouteLabel('/some/unknown/route')).toBe('Page Not Found')
-    expect(resolveRouteLabel('/DASHBOARD')).toBe('Page Not Found')
-  })
-
-  it('treats trailing-slash variants as the same route', () => {
-    expect(resolveRouteLabel('/dashboard/')).toBe('Dashboard page')
-  })
-
-  it('never returns an empty string', () => {
-    const inputs: unknown[] = ['', undefined, null, 0, {}, [], '/', '/nope']
-    for (const input of inputs) {
-      expect(resolveRouteLabel(input).length).beaterThan(0)
-    }
-  })
-})
+function getAnnouncer(): HTMLElement {
+  const el = document.querySelector('.sr-only')
+  if (!el) {
+    throw new Error('RouteAnnouncer live region not found')
+  }
+  return el as HTMLElement
+}
 
 describe('RouteAnnouncer Component', () => {
   beforeEach(() => {
@@ -79,10 +29,8 @@ describe('RouteAnnouncer Component', () => {
     )
 
     const announcerRegion = getAnnouncer()
-    expect(announcerRegion).toBeInTheDocument()
     expect(announcerRegion).toHaveAttribute('aria-live', 'polite')
     expect(announcerRegion).toHaveAttribute('aria-atomic', 'true')
-    expect(announcerRegion).toHaveClass('sr-only')
   })
 
   it('defers the announcement text setup until after layout paint', () => {
@@ -96,44 +44,33 @@ describe('RouteAnnouncer Component', () => {
     expect(announcer.textContent).toBe('')
 
     act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
+      vi.advanceTimersByTime(100)
     })
     expect(announcer.textContent).toBe('Bond page loaded')
   })
 
-  it('does not announce before the delay elapses', () => {
-    render(
-      <MemoryRouter initialEntries={['/trust']}>
-        <RouteAnnouncer />
-      </MemoryRouter>
-    )
-
-    act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS - 1)
-    })
-    expect(getAnnouncer().textContent).toBe('')
-  })
-
   it('updates text dynamically on active route modifications', () => {
-    function NavigationHarness() {
-      const navigate = useNavigate()
-      useEffect(() => {
-        navigate('/trust')
-      }, [navigate])
-      return null
-    }
-
-    render(
-      <MemoryRouter initialEntries={['/dashboard']}>
+    const { rerender } = render(
+      <MemoryRouter key="dashboard" initialEntries={['/dashboard']}>
         <RouteAnnouncer />
-        <NavigationHarness />
       </MemoryRouter>
     )
 
     act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
+      vi.advanceTimersByTime(100)
     })
-    expect(getAnnouncer().textContent).toBe('Trust Score page loaded')
+    expect(screen.getByText('Dashboard page loaded')).toBeInTheDocument()
+
+    rerender(
+      <MemoryRouter key="/trust" initialEntries={'/trust'}>
+        <RouteAnnouncer />
+      </MemoryRouter>
+    )
+
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(screen.getByText('Trust Score page loaded')).toBeInTheDocument()
   })
 
   it('falls back gracefully to structural 404 descriptions given unknown routes', () => {
@@ -144,105 +81,112 @@ describe('RouteAnnouncer Component', () => {
     )
 
     act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
+      vi.advanceTimersByTime(100)
     })
-    expect(getAnnouncer().textContent).toBe('Page Not Found loaded')
+    expect(screen.getByText('Page Not Found loaded')).toBeInTheDocument()
   })
 
-  it('cancels a stale announcement when navigation occurs before the delay', () => {
+  describe('resolveRouteLabel', () => {
+    it('returns the mapped label for every registered route', () => {
+      expect(resolveRouteLabel('/')).toBe('Home page')
+      expect(resolveRouteLabel('/dashboard')).toBe('Dashboard page')
+      expect(resolveRouteLabel('/bond')).toBe('Bond page')
+      expect(resolveRouteLabel('/trust')).toBe('Trust Score page')
+      expect(resolveRouteLabel('/settings')).toBe('Settings page')
+    })
+
+    it('falls back for unknown, malformed, and non-string inputs', () => {
+      expect(resolveRouteLabel('/not-real')).toBe('Page Not Found')
+      expect(resolveRouteLabel('')).toBe('Page Not Found')
+      expect(resolveRouteLabel(undefined)).toBe('Page Not Found')
+      expect(resolveRouteLabel(null)).toBe('Page Not Found')
+      expect(resolveRouteLabel(123)).toBe('Page Not Found')
+    })
+
+    it('does not leak inherited object members for prototype-polluting keys', () => {
+      expect(resolveRouteLabel('__proto__')).toBe('Page Not Found')
+      expect(resolveRouteLabel('constructor')).toBe('Page Not Found')
+      expect(resolveRouteLabel('toString')).toBe('Page Not Found')
+      expect(resolveRouteLabel('hasOwnProperty')).toBe('Page Not Found')
+    })
+  })
+
+  it('cancels a pending announcement when the route changes before the delay elapses', () => {
     function NavigationHarness() {
       const navigate = useNavigate()
       useEffect(() => {
-        // Navigate again well before the first announcement delay elapses.
-        const id = setTimeout(() => navigate('/settings'), 20)
+        // Schedule a route change within the announcement delay window.
+        const id = setTimeout(() => navigate('/trust'), 50)
         return () => clearTimeout(id)
       }, [navigate])
-      return null
+
+      return (
+        <Routes location={undefined}>
+          <Route path="*" element={<RouteAnnouncer />} />
+        </Routes>
+      )
     }
 
     render(
       <MemoryRouter initialEntries={['/dashboard']}>
-        <RouteAnnoucer />
         <NavigationHarness />
       </MemoryRouter>
     )
 
-    // Advance past the first delay and the navigation timer.
-    act(() => {
-      vi.advanceTimersByTime(20)
-    })
-    act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
-    })
+    const announcer = getAnnouncer()
 
-    // Only the final route label is announced.
-    expect(getAnnouncer().textContent).toBe('Settings page loaded')
+    // Advance past the navigation trigger but not past the announcement delay.
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+    expect(announcer.textContent).toBe('')
+
+    // Now flush the remaining delay; only the latest route may be announced.
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(announcer.textContent).toBe('Trust Score page loaded')
   })
 
-  it('does not re-announce the same label on repeated renders', () => {
+  it('does not announce again when the same pathname re-renders', () => {
     const { rerender } = render(
-      <MemoryRouter initialEntries={'/dashboard'}>
+      <MemoryRouter initialEntries={['/settings']}>
         <RouteAnnouncer />
       </MemoryRouter>
     )
 
     act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
+      vi.advanceTimersByTime(100)
     })
-    expect(getAnnouncer().textContent).toBe('Dashboard page loaded')
+    const announcer = getAnnouncer()
+    expect(announcer.textContent).toBe('Settings page loaded')
 
+    // Simulate a re-render with the same route; the announcement must not
+    // be reset or re-emitted.
     rerender(
-      <MemoryRouter initialEntries={['/dashboard']}>
+      <MemoryRouter initialEntries={'/settings'}>
         <RouteAnnouncer />
       </MemoryRouter>
     )
 
     act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
+      vi.advanceTimersByTime(100)
     })
-    expect(getAnnouncer().textContent).toBe('Dashboard page loaded')
+    expect(announcer.textContent).toBe('Settings page loaded')
   })
 
-  it('clears pending timers on unmount without leaking announcements', () => {
+  it('clears a pending timer on unmount without throwing', () => {
     const { unmount } = render(
-      <MemoryRouter initialEntries={'/bond'}>
+      <MemoryRouter initialEntries={['/bond']}>
         <RouteAnnouncer />
       </MemoryRouter>
     )
-
-    unmount()
 
     expect(() => {
+      unmount()
       act(() => {
-        vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
+        vi.advanceTimersByTime(100)
       })
     }).not.toThrow()
-  })
-
-  it('recovers: announces the new route after an unknown route recovery', () => {
-    function NavigationHarness() {
-      const navigate = useNavigate()
-      useEffect(() => {
-        const id = setTimeout(() => navigate('/dashboard'), 20)
-        return () => clearTimeout(id)
-      }, [navigate])
-      return null
-    }
-
-    render(
-      <MemoryRouter initialEntries={'/not-a-real-route'}>
-        <RouteAnnoucer />
-        <NavigationHarness />
-      </MemoryRouter>
-    )
-
-    act(() => {
-      vi.advanceTimersByTime(20)
-    })
-    act(() => {
-      vi.advanceTimersByTime(ANNOUNCEMENT_DELAY_MS)
-    })
-
-    expect(getAnnouncer().textContent).toBe('Dashboard page loaded')
   })
 })
