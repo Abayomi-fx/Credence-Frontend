@@ -124,7 +124,13 @@ const saveAuditLog = (records: BondAuditRecord[]): void => {
 // Divider used between review card sections
 // ---------------------------------------------------------------------------
 
-const ReviewDivider = () => <div className="createBondFlow__reviewDivider" />
+const ReviewDivider = () => (
+  <div
+    aria-hidden="true"
+    className="createBondFlow__reviewDivider"
+    role="separator"
+  />
+)
 
 /**
  * Emits a diagnostic when a wizard transition is refused because the wizard is
