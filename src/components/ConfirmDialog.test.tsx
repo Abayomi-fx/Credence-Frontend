@@ -190,6 +190,61 @@ describe('ConfirmDialog', () => {
       await user.click(screen.getByRole('button', { name: 'Withdraw bond' }))
       expect(onConfirm).toHaveBeenCalledOnce()
     })
+
+    it('handles async onConfirm and displays error on rejection', async () => {
+      const user = userEvent.setup()
+      const onConfirm = vi.fn().mockRejectedValue(new Error('Network error'))
+      const props = {
+        open: true,
+        title: 'Withdraw Bond',
+        breakdown: defaultBreakdown,
+        onConfirm,
+        onCancel: vi.fn(),
+      }
+      render(<ConfirmDialog {...props} />)
+      const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+      await user.type(input, 'CONFIRM')
+      const confirmButton = screen.getByRole('button', { name: 'Withdraw bond' })
+      
+      await user.click(confirmButton)
+      
+      // Wait for error to appear
+      expect(await screen.findByRole('alert')).toHaveTextContent('Network error')
+      
+      // Ensure button is re-enabled for retry
+      expect(confirmButton).toBeEnabled()
+    })
+
+    it('sets button to loading state while onConfirm is pending', async () => {
+      const user = userEvent.setup()
+      let resolvePromise: () => void
+      const promise = new Promise<void>((resolve) => {
+        resolvePromise = resolve
+      })
+      const onConfirm = vi.fn().mockReturnValue(promise)
+      const props = {
+        open: true,
+        title: 'Withdraw Bond',
+        breakdown: defaultBreakdown,
+        onConfirm,
+        onCancel: vi.fn(),
+      }
+      render(<ConfirmDialog {...props} />)
+      const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+      await user.type(input, 'CONFIRM')
+      const confirmButton = screen.getByRole('button', { name: 'Withdraw bond' })
+      
+      await user.click(confirmButton)
+      
+      // Should be disabled while submitting
+      expect(confirmButton).toBeDisabled()
+      
+      // Cancel button should also be disabled
+      const cancelButton = screen.getByRole('button', { name: 'Cancel' })
+      expect(cancelButton).toBeDisabled()
+      
+      resolvePromise!()
+    })
   })
 
   describe('onCancel callback', () => {

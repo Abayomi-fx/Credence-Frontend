@@ -34,7 +34,7 @@ export interface ConfirmDialogProps {
    * React children slot for custom content in the dialog body.
    */
   children?: React.ReactNode
-  onConfirm: () => void
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
   returnFocusRef?: RefObject<HTMLElement | null>
   confirmLabel?: string
@@ -87,6 +87,10 @@ export default function ConfirmDialog({
   const [confirmText, setConfirmText] = useState('')
   const [announcement, setAnnouncement] = useState('')
   const [prevConfirmEnabled, setPrevConfirmEnabled] = useState(false)
+  const [internalIsSubmitting, setInternalIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const isCurrentlySubmitting = isSubmitting || internalIsSubmitting
 
   const handleCancel = useCallback(() => {
     onCancel()
@@ -107,6 +111,8 @@ export default function ConfirmDialog({
       setConfirmText('')
       setAnnouncement('')
       setPrevConfirmEnabled(false)
+      setError(null)
+      setInternalIsSubmitting(false)
       return
     }
 
@@ -131,13 +137,30 @@ export default function ConfirmDialog({
     }
   }, [isConfirmEnabled, prevConfirmEnabled, confirmPhrase, t])
 
-  const handleConfirm = () => {
-    if (!isConfirmEnabled) return
-    onConfirm()
+  const handleConfirm = async () => {
+    if (!isConfirmEnabled || isCurrentlySubmitting) return
+
+    setError(null)
+    try {
+      const result = onConfirm()
+      if (result instanceof Promise) {
+        setInternalIsSubmitting(true)
+        await result
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.'
+      setError(message)
+      setAnnouncement(`Error: ${message}`)
+      requestAnimationFrame(() => {
+        confirmRef.current?.focus()
+      })
+    } finally {
+      setInternalIsSubmitting(false)
+    }
   }
 
   const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (isSubmitting) return
+    if (isCurrentlySubmitting) return
     if (event.target === event.currentTarget) {
       handleCancel()
     }
@@ -191,6 +214,12 @@ export default function ConfirmDialog({
 
           {children}
 
+          {error && (
+            <div className="confirm-dialog__error" role="alert" aria-live="assertive">
+              {error}
+            </div>
+          )}
+
           <div className="confirm-dialog__confirm-field">
             <label htmlFor={`${titleId}-confirm-input`}>
               {confirmInputLabel || (
@@ -225,7 +254,7 @@ export default function ConfirmDialog({
             type="button"
             variant="secondary"
             onClick={handleCancel}
-            disabled={isSubmitting}
+            disabled={isCurrentlySubmitting}
           >
             Cancel
           </Button>
@@ -233,10 +262,10 @@ export default function ConfirmDialog({
             ref={confirmRef}
             type="button"
             variant={variant === 'danger' ? 'danger' : 'primary'}
-            disabled={!isConfirmEnabled || isSubmitting}
-            isLoading={isSubmitting}
+            disabled={!isConfirmEnabled || isCurrentlySubmitting}
+            isLoading={isCurrentlySubmitting}
             onClick={handleConfirm}
-            aria-disabled={!isConfirmEnabled || isSubmitting}
+            aria-disabled={!isConfirmEnabled || isCurrentlySubmitting}
           >
             {confirmLabel}
           </Button>
