@@ -76,6 +76,7 @@ export default defineConfig({
         'src/hooks/useLocalStorage.ts',
         'src/hooks/useReducedMotion.ts',
         'src/lib/bondPenalty.ts',
+        'src/lib/createBondFlowSteps.ts',
       ],
       reporter: ['text', 'lcov'],
       thresholds: {
@@ -84,6 +85,7 @@ export default defineConfig({
         'src/hooks/useLocalStorage.ts': { lines: 95, branches: 95 },
         'src/hooks/useReducedMotion.ts': { branches: 90 },
         'src/lib/bondPenalty.ts': { lines: 95, branches: 95, functions: 95 },
+        'src/lib/createBondFlowSteps.ts': { lines: 100, branches: 100, functions: 100 },
       },
     },
   },
