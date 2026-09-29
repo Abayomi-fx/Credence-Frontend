@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useCallback } from 'react'
 import { FormField } from './forms/FormField'
 import './AddressInput.css'
 import { useSettings } from '../context/SettingsContext'
+import Banner from './Banner' // assuming Banner exists
 
 interface AddressInputProps {
   id: string
@@ -9,6 +10,7 @@ interface AddressInputProps {
   value: string
   onChange: (value: string) => void
   onValidationChange?: (isValid: boolean) => void
+  onBlur?: (value: string) => Promise<void> | void
   disabled?: boolean
   className?: string
   /**
@@ -75,6 +77,7 @@ interface AddressInputInnerProps {
   focused: boolean
   showError: boolean
   showSuccess: boolean
+  blurState: 'idle' | 'loading' | 'error' | 'stale' | 'permission'
 }
 
 function AddressInputInner({
@@ -91,10 +94,11 @@ function AddressInputInner({
   focused,
   showError,
   showSuccess,
+  blurState,
 }: AddressInputInnerProps) {
   return (
     <div
-      className={`address-input-container ${focused ? 'address-input-container--focused' : ''} ${showError ? 'address-input-container--error' : ''} ${showSuccess ? 'address-input-container--success' : ''}`}
+      className={`address-input-container ${focused ? 'address-input-container--focused' : ''} ${showError ? 'address-input-container--error' : ''} ${showSuccess ? 'address-input-container--success' : ''} ${blurState === 'loading' ? 'address-input-container--loading' : ''}`}
     >
       <input
         ref={inputRef}
@@ -106,7 +110,7 @@ function AddressInputInner({
         onChange={onChange}
         onBlur={onBlur}
         onFocus={onFocus}
-        disabled={disabled}
+        disabled={disabled || blurState === 'loading'}
         placeholder="Enter Stellar address (G...)"
         className="address-input-field"
         spellCheck="false"
@@ -114,31 +118,35 @@ function AddressInputInner({
         autoCapitalize="off"
       />
 
-      <button
-        type="button"
-        onClick={handlePaste}
-        disabled={disabled}
-        className="address-input-paste-button"
-        aria-label="Paste address from clipboard"
-        title="Paste address from clipboard"
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-hidden="true"
+      {blurState === 'loading' ? (
+        <span className="address-input-spinner" aria-label="Loading..." role="status" />
+      ) : (
+        <button
+          type="button"
+          onClick={handlePaste}
+          disabled={disabled}
+          className="address-input-paste-button"
+          aria-label="Paste address from clipboard"
+          title="Paste address from clipboard"
         >
-          <path
-            d="M10.5 1H5.5C4.67157 1 4 1.67157 4 2.5V3H2.5C1.67157 3 1 3.67157 1 4.5V13.5C1 14.3284 1.67157 15 2.5 15H10.5C11.3284 15 12 14.3284 12 13.5V12H13.5C14.3284 12 15 11.3284 15 10.5V2.5C15 1.67157 14.3284 1 13.5 1H10.5Z"
-            stroke="currentColor"
-            strokeWidth="1.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path
+              d="M10.5 1H5.5C4.67157 1 4 1.67157 4 2.5V3H2.5C1.67157 3 1 3.67157 1 4.5V13.5C1 14.3284 1.67157 15 2.5 15H10.5C11.3284 15 12 14.3284 12 13.5V12H13.5C14.3284 12 15 11.3284 15 10.5V2.5C15 1.67157 14.3284 1 13.5 1H10.5Z"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
     </div>
   )
 }
@@ -149,6 +157,7 @@ export default function AddressInput({
   value,
   onChange,
   onValidationChange,
+  onBlur,
   disabled = false,
   className = '',
   error: externalError,
@@ -160,15 +169,54 @@ export default function AddressInput({
   const [focused, setFocused] = useState(false)
   const [attempted, setAttempted] = useState(false)
 
+  const [blurState, setBlurState] = useState<'idle' | 'loading' | 'error' | 'stale' | 'permission'>('idle')
+  const [blurError, setBlurError] = useState<string | null>(null)
+  
+  const blurPromiseRef = useRef<Promise<void> | null>(null)
+  const failedValueRef = useRef<string | null>(null)
+
   const isValid = isValidStellarAddress(value)
   const isEmpty = !value
   const showError = attempted && !isValid && !isEmpty
-  const showSuccess = attempted && isValid
+  const showSuccess = attempted && isValid && blurState !== 'error' && blurState !== 'permission' && blurState !== 'stale'
 
   // Notify parent of validation state change
   React.useEffect(() => {
     onValidationChange?.(isValid)
   }, [isValid, onValidationChange])
+
+  const executeBlur = useCallback(async (valToValidate: string) => {
+    if (!onBlur) return
+    
+    setBlurState('loading')
+    setBlurError(null)
+    
+    const currentPromise = Promise.resolve(onBlur(valToValidate))
+    blurPromiseRef.current = currentPromise
+    
+    try {
+      await currentPromise
+      if (blurPromiseRef.current !== currentPromise) return
+      
+      setBlurState('idle')
+      failedValueRef.current = null
+    } catch (err: any) {
+      if (blurPromiseRef.current !== currentPromise) return
+      
+      failedValueRef.current = valToValidate
+      const isPermission = err?.name === 'NotAllowedError' || err?.name === 'SecurityError' || err?.message?.toLowerCase().includes('permission')
+      const isStale = err?.name === 'StaleError' || err?.message?.toLowerCase().includes('stale')
+      
+      if (isPermission) {
+        setBlurState('permission')
+      } else if (isStale) {
+        setBlurState('stale')
+      } else {
+        setBlurState('error')
+      }
+      setBlurError(err?.message || 'Validation failed on blur')
+    }
+  }, [onBlur])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value
@@ -178,15 +226,29 @@ export default function AddressInput({
     if (!attempted) {
       setAttempted(true)
     }
+    // Reset async error state if user changes input
+    if (blurState !== 'idle' && blurState !== 'loading') {
+       setBlurState('idle')
+       setBlurError(null)
+    }
   }
 
-  const handleBlur = () => {
+  const handleBlurEvent = () => {
     setFocused(false)
     setAttempted(true)
+    executeBlur(value)
   }
 
   const handleFocus = () => {
     setFocused(true)
+  }
+
+  const handleRetry = () => {
+    if (failedValueRef.current !== null) {
+      executeBlur(failedValueRef.current)
+    } else {
+      executeBlur(value)
+    }
   }
 
   const handlePaste = async () => {
@@ -195,6 +257,11 @@ export default function AddressInput({
       const trimmedText = text.trim()
       onChange(trimmedText)
       setAttempted(true)
+      
+      if (blurState !== 'idle' && blurState !== 'loading') {
+         setBlurState('idle')
+         setBlurError(null)
+      }
 
       // Focus the input after paste
       if (inputRef.current) {
@@ -215,7 +282,7 @@ export default function AddressInput({
   const error = externalError ?? formatError
   const hint = 'Stellar public key format (56 characters, starts with G)'
   // Visual + FormField success only when format is valid and no external error.
-  const successMessage = !externalError && showSuccess ? 'Valid Stellar address' : undefined
+  const successMessage = !externalError && showSuccess && blurState === 'idle' ? 'Valid Stellar address' : undefined
 
   return (
     <div className={`address-input-wrapper ${className}`}>
@@ -230,15 +297,37 @@ export default function AddressInput({
           inputRef={inputRef}
           value={value}
           onChange={handleChange}
-          onBlur={handleBlur}
+          onBlur={handleBlurEvent}
           onFocus={handleFocus}
           disabled={disabled}
           handlePaste={handlePaste}
           focused={focused}
           showError={Boolean(error)}
           showSuccess={Boolean(successMessage)}
+          blurState={blurState}
         />
       </FormField>
+      
+      {blurState === 'permission' && (
+        <div className="address-input-blur-error" role="alert" style={{ marginTop: '0.5rem', color: 'var(--color-error)' }}>
+          <strong>Permission Denied:</strong> {blurError}
+          <button type="button" onClick={handleRetry} style={{ marginLeft: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+        </div>
+      )}
+      
+      {blurState === 'stale' && (
+        <div className="address-input-blur-error" role="alert" style={{ marginTop: '0.5rem', color: 'var(--color-warning)' }}>
+          <strong>Stale Data:</strong> {blurError}
+          <button type="button" onClick={handleRetry} style={{ marginLeft: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+        </div>
+      )}
+      
+      {blurState === 'error' && (
+        <div className="address-input-blur-error" role="alert" style={{ marginTop: '0.5rem', color: 'var(--color-error)' }}>
+          <strong>Error:</strong> {blurError}
+          <button type="button" onClick={handleRetry} style={{ marginLeft: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+        </div>
+      )}
 
       {/* Address echo display when valid */}
       {showSuccess && value && (

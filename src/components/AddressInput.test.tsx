@@ -373,3 +373,65 @@ describe('echo display respects addressDisplay setting', () => {
     )
   })
 })
+
+// --- Async onBlur failure boundary ---
+describe('async onBlur failure boundary', () => {
+  it('handles successful onBlur async validation', async () => {
+    const user = userEvent.setup()
+    const onBlurMock = vi.fn().mockResolvedValue(undefined)
+    render(<AddressInput id="addr" value={VALID_KEY} onChange={vi.fn()} onBlur={onBlurMock} />)
+    
+    await user.click(screen.getByRole('textbox'))
+    await user.tab()
+    
+    expect(onBlurMock).toHaveBeenCalledWith(VALID_KEY)
+  })
+
+  it('displays error and retry on rejected onBlur', async () => {
+    const user = userEvent.setup()
+    const onBlurMock = vi.fn().mockRejectedValue(new Error('Network error'))
+    render(<AddressInput id="addr" value={VALID_KEY} onChange={vi.fn()} onBlur={onBlurMock} />)
+    
+    await user.click(screen.getByRole('textbox'))
+    await user.tab()
+    
+    expect(await screen.findByText('Error:')).toBeInTheDocument()
+    
+    const retryBtn = screen.getByRole('button', { name: /retry/i })
+    expect(retryBtn).toBeInTheDocument()
+    
+    onBlurMock.mockResolvedValue(undefined)
+    await user.click(retryBtn)
+    
+    // Error goes away on success
+    expect(screen.queryByText('Error:')).not.toBeInTheDocument()
+  })
+
+  it('handles permission denied error', async () => {
+    const user = userEvent.setup()
+    const err = new Error('Permission denied')
+    err.name = 'NotAllowedError'
+    const onBlurMock = vi.fn().mockRejectedValue(err)
+    
+    render(<AddressInput id="addr" value={VALID_KEY} onChange={vi.fn()} onBlur={onBlurMock} />)
+    
+    await user.click(screen.getByRole('textbox'))
+    await user.tab()
+    
+    expect(await screen.findByText(/Permission Denied/i)).toBeInTheDocument()
+  })
+  
+  it('handles stale error', async () => {
+    const user = userEvent.setup()
+    const err = new Error('StaleData')
+    err.name = 'StaleError'
+    const onBlurMock = vi.fn().mockRejectedValue(err)
+    
+    render(<AddressInput id="addr" value={VALID_KEY} onChange={vi.fn()} onBlur={onBlurMock} />)
+    
+    await user.click(screen.getByRole('textbox'))
+    await user.tab()
+    
+    expect(await screen.findByText(/Stale Data/i)).toBeInTheDocument()
+  })
+})
