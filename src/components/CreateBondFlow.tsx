@@ -292,19 +292,31 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
   const stepIndicatorTransition = prefersReducedMotion ? 'none' : 'background 0.2s ease'
   const durationButtonTransition = prefersReducedMotion ? 'none' : 'all 0.2s ease'
 
-  const StepIndicator = () => (
-    <div className="createBondFlow__stepIndicator" aria-label={`Step ${step} of 4`}>
-      {[1, 2, 3, 4].map((i) => (
-        <div
-          key={i}
-          className={['createBondFlow__stepBar', i <= step ? 'createBondFlow__stepBar--active' : '']
-            .filter(Boolean)
-            .join(' ')}
-          style={{ transition: stepIndicatorTransition }}
-        />
-      ))}
-    </div>
-  )
+  const StepIndicator = () => {
+    const getStepClass = (i: number) => {
+      const classes = ['createBondFlow__stepBar']
+      if (i <= step) classes.push('createBondFlow__stepBar--active')
+      if (i === step) {
+        if (submitting) classes.push('createBondFlow__stepBar--loading')
+        else if (error || confirmError) classes.push('createBondFlow__stepBar--error')
+        else if (!isConnected) classes.push('createBondFlow__stepBar--permission')
+      }
+      return classes.join(' ')
+    }
+
+    return (
+      <div className="createBondFlow__stepIndicator" aria-label={`Step ${step} of 4`}>
+        {[1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className={getStepClass(i)}
+            style={{ transition: stepIndicatorTransition }}
+            aria-current={i === step ? 'step' : undefined}
+          />
+        ))}
+      </div>
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // Render
@@ -585,3 +597,5 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
     </div>
   )
 }
+
+
