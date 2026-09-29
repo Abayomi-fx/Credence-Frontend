@@ -4,28 +4,22 @@ import { useToast } from './ToastProvider'
 import useCopyToClipboard from '../hooks/useCopyToClipboard'
 import { BETA_RIBBON_LABEL } from '../config/constants'
 import { SWIPE_DISMISS_THRESHOLD } from '../config/gestures'
-import ErrorBoundary from './ErrorBoundary'
-import ErrorState, { type ErrorStateKind } from './states/ErrorState'
+import ErrorState from './states/ErrorState'
 import './ActionCard.css'
 
 /**
- * State model for the card's copy-link action.
+ * State machine for the copy-link action. The card must never silently
+ * swallow a failure, and must not fire concurrent copies that could lead
+ * to out-of-order toasts / stale success messages.
  *
- * The card must never lose user data or leave the UI in an ambiguous
- * state when the clipboard write fails. The action is therefore modeled
- * as an explicit discriminated union with a deterministic transition
- * table:
+ *   idle     -> copying -> success  (toast, then back to idle)
+ *   idle      -> copying -> error    (ErrorState with retry)
+ *   error     -> copying -> success / error
  *
- *   idle    --click-->  copying --success--> ide
- *   ide
- *   copying  --failure-->  error
- *   error   --click-->  copying
- *
- * Concurrent clicks are colapsed into a single in-flight request via a
- * monotonic request id guard, so a slower earlier response can never
- * overwrite the result of a newer one.
+ * The copy promise is guarded by a monotonic request id so a slow or rejected
+ * call from an earlier click cannot overwrite the result of a later one.
  */
-export type ActionCardCopyStatus = 'idle' | 'copying' | 'error'
+export type CopyLinkStatus = 'idle' | 'copying' | 'success' | 'error'
 
 export interface ActionCardProps {
   title: string
@@ -53,36 +47,12 @@ export interface ActionCardProps {
    */
   onDismiss?: () => void
   /**
-   * Optional callback invoked when the card's copy-link action fails.
-   * Useful for wiring telemetry without exposing the shareable URL.
+   * Optional callback invoked when the copy-link action fails. Useful for
+   * telemetry / observability. The card still renders an inline retry UI
+   * when this is not provided.
    */
   onCopyError?: (error: unknown) => void
-  /**
-   * Optional callback invoked when the card's copy-link action succeeds.
-   */
-  onCopySuccess?: () => void
-  /**
-   * Optional override for the copy-link action's async work. Tests and
-   * host apps can inject a deterministic implementation. Defaults to the
-   * shared clipboard hook.
-   */
-  copyToClipboard?: (value: string) => Promise<boolean>
-  /**
-   * Optional content to render inside the card's content slot when the
-   * card's children throw during render. Defaults to an inline ErrorState
-   * with a retry action.
-   */
-  renderError?: (error: Error, reset: () => void) => ReactNode
-}
-
-const COPY_FAILURE_KIND: ErrorStateKind = 'generic'
-
-function isAbortError(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    ('value' in value && (value as { name?: string }).name === 'AbortError')
-  )
+  children: ReactNode
 }
 
 export default function ActionCard({
@@ -93,34 +63,41 @@ export default function ActionCard({
   isEarlyAccess,
   onDismiss,
   onCopyError,
-  onCopySuccess,
-  copyToClipboard,
-  renderError,
   children,
 }: ActionCardProps) {
   const { t } = useTranslation()
   const { addToast } = useToast()
-  const { copy: defaultCopy } = useCopyToClipboard()
+  const { copy } = useCopyToClipboard()
 
   const [offset, setOffset] = useState(0)
   const [isSwiping, setIsSwiping] = useState(false)
   const touchStartX = useRef<number | null>(null)
 
-  // Deterministic copy-link state machine. See the module-level comment
-  // above for the transition table and concurrency guarantees.
-  const [copyStatus, setCopyStatus] = useState<ActionCardCopyStatus>('idle')
-  const copyRequestId = useRef(0)
-  const isMounted = useRef(true)
+  // Copy-link failure-boundary state.
+  const [copyStatus, setCopyStatus] = useState<CopyLinkStatus>('idle')
+  const [copyError, setCopyError] = useState<unknown>(null)
+  // Monotonic request id. Only the latest in-flight copy may commit state.
+  const copyRequestIdRef = useRef(0)
+  // Track mounted state so a resolved copy promise cannot touch state after
+  // the card unmounts (e.g. swipe-dismiss during a copy).
+  const isMountedRef = useRef(true)
 
   useEffect(
     () => () => {
-      // Invalidate any in-flight copy so a late resolution cannot set
-      // state on an unmounted card (avoids React warnings and stale toasts).
-      isMounted.current = false
-      copyRequestId.current += 1
+      isMountedRef.current = false
+      // Invalidate any in-flight copy so its completion is a no-op.
+      copyRequestIdRef.current += 1
     },
     []
   )
+
+  // Reset the failure boundary when the target link changes -- a stale error
+  // from a previous link must not leak into the new one.
+  useEffect(() => {
+    copyRequestIdRef.current += 1
+    setCopyStatus('idle')
+    setCopyError(null)
+  }, [shareableLink])
 
   const handleTouchStart = (e: TouchEvent<HTMLElement>) => {
     if (!onDismiss) return
@@ -159,64 +136,47 @@ export default function ActionCard({
   const style = onDismiss && isSwiping ? { transform: `translateX(${offset}px)` } : undefined
 
   const handleCopyLink = useCallback(async () => {
-    if (!shareableLink) return
-    // Collapse concurrent clicks into a single in-flight request. A newer
-    // click after a failure is allowed (retry), but a click while already
-    // copying is ignored.
-    if (copyStatus === 'copying') return
+    if (!shareableLink || copyStatus === 'copying') return
 
-    const requestId = copyRequestId.current + 1
-    copyRequestId.current = requestId
+    const requestId = copyRequestIdRef.current + 1
+    copyRequestIdRef.current = requestId
     setCopyStatus('copying')
-
-    const copyFn = copyToClipboard ?? defaultCopy
+    setCopyError(null)
 
     try {
-      const success = await copyFn(shareableLink)
+      const success = await copy(shareableLink)
 
-      // Stale response guard: a newer request or an unmount has superseded
-      // this one, so it must not mutate state or emit toasts.
-      if (!isMounted.current || copyRequestId.current !== requestId) return
+      // If a newer copy request started, or the card unmounted, this result
+      // is stale and must not mutate state.
+      if (!isMountedRef.current || copyRequestIdRef.current !== requestId) return
 
       if (success) {
-        setCopyStatus('idle')
+        setCopyStatus('success')
         addToast('success', t('dashboard.linkCopied'))
-        onCopySuccess?.()
       } else {
-        // Failure is a non-throwing false result from the clipboard hook.
-        // Treat it as a deterministic error state so the UI is never
-        // silently wrong.
+        // A resolved `false` means the clipboard write was rejected (not
+        // a thrown error). Treat it as a failure and surface a retry affordance.
+        const error = new Error('Clipboard write was rejected')
+        setCopyError(error)
         setCopyStatus('error')
-        addToast('error', t('dashboard.linkCopyFailed'))
-        onCopyError?.(new Error('Clipboard copy returned false'))
+        onCopyError+?.(error)
       }
     } catch (error) {
-      // Aborted requests are expected on unmount / supersede and must not
-      // surface as a failure to the user.
-      if (isAbortError(error)) return
-      if (!isMounted.current || copyRequestId.current !== requestId) return
-
+      if (!isMountedRef.current || copyRequestIdRef.current !== requestId) return
+      setCopyError(error)
       setCopyStatus('error')
-      addToast('error', t('dashboard.linkCopyFailed'))
-      onCopyError?.(error)
+      onCopyError+?.(error)
     }
-  }, [
-    shareableLink,
-    copyStatus,
-    copyToClipboard,
-    defaultCopy,
-    addToast,
-    t,
-    onCopyError,
-    onCopySuccess,
-  ])
+  }, [shareableLink, copy, addToast, t, copyStatus, onCopyError])
 
-  const copyLabel =
-    copyStatus === 'copying'
-      ? t('dashboard.copyLinkInProgress', { defaultValue: 'Copying link' })
-      : copyStatus === 'error'
-        ? t('dashboard.retryCopyLink', { defaultValue: 'Retry copying link' })
-        : t('dashboard.copyLink')
+  const handleRetryCopy = useCallback(() => {
+    // Retry must not be allowed to run concurrently with an in-flight copy.
+    if (copyStatus === 'copying') return
+    void handleCopyLink
+    ()
+  }, [copyStatus, handleCopyLink])
+
+  const isCopying = copyStatus === 'copying'
 
   return (
     <article
@@ -225,11 +185,10 @@ export default function ActionCard({
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
-      data-copy-status={copyStatus}
     >
       {isEarlyAccess && (
         <div className="actionCard__betaRibbon" aria-hidden="true">
-          {BETA_RIBBOA_LABEL}
+          {BETA_RIBBON_LABEL}
         </div>
       )}
       <div className="actionCard__header">
@@ -239,11 +198,10 @@ export default function ActionCard({
             type="button"
             className="actionCard__copyLink"
             onClick={handleCopyLink}
-            disabled={copyStatus === 'copying'}
-            aria-busy={copyStatus === 'copying'}
-            aria-label={copyLabel}
-            title={copyLabel}
-            data-copy-status={copyStatus}
+            aria-label={t('dashboard.copyLink')}
+            title={t('dashboard.copyLink')}
+            disabled={isCopying}
+            aria-busy={isCopying}
           >
             <svg
               width="16"
@@ -285,32 +243,22 @@ export default function ActionCard({
         )}
       </div>
 
-      <div className="actionCard__content">
-        <ErrorBoundary
-          fallback={(error, reset) =>
-            renderError ? (
-              renderError(error, reset)
-            ) : (
-              <ErrorState
-                type={COPY_FAILURE_KIND}
-                title={t('dashboard.cardContentErrorTitle', {
-                  defaultValue: 'This card couldn’t load',
-                })}
-                message={t('dashboard.cardContentErrorMessage', {
-                  defaultValue:
-                    'We hit a snag rendering this card. Try again — your data is safe.',
-                })}
-                ariaLabel={t('dashboard.cardContentErrorAria', {
-                  defaultValue: 'Card content error',
-                })}
-                action={{ label: t('dashboard.retry', { defaultValue: 'Try again' }), onClick: reset }}
-              />
-            )
-        }
-        >
-          {children}
-        </ErrorBoundary>
-      </div>
+      <div className="actionCard__content">{children}</div>
+
+      {copyStatus === 'error' && (
+        <div className="actionCard__error" data-testid="actionCard-copy-error">
+          <ErrorState
+            type="generic"
+            severity="warning"
+            title={t('dashboard.copyLinkErrorTitle', { defaultValue: "Couldn't copy the link" })}
+            message={t('dashboard.copyLinkErrorMessage', {
+              defaultValue:
+                'Your clipboard may be blocked or unavailable. Try again, or copy the address from the browser bar.',
+            })}
+            action={{ label: t('dashboard.retry', { defaultValue: 'Try again' }), onClick: handleRetryCopy }}
+          />
+        </div>
+      )}
     </article>
   )
 }

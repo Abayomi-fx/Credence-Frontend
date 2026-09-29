@@ -1,11 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
 import ActionCard from './ActionCard'
 
 vi.mock('./ActionCard.css', () => ({}))
-vi.mock('./ErrorBoundary.css', () => ({}))
-vi.mock('./states/ErrorState.css', () => ({}))
 
 const mockAddToast = vi.fn()
 const mockCopy = vi.fn()
@@ -29,20 +26,11 @@ vi.mock('react-i18next', () => ({
       const translations: Record<string, string> = {
         'dashboard.copyLink': 'Copy link to this card',
         'dashboard.linkCopied': 'Link copied to clipboard',
-        'dashboard.linkCopyFailed': 'Couldn’t copy the link. Please try again',
-        'dashboard.copyLinkInProgress': 'Copying link',
-        'dashboard.retryCopyLink': 'Retry copying link',
-        'dashboard.closeCard': 'Close card',
       }
       return translations[key] || options?.defaultValue || key
     },
   }),
 }))
-
-const defaultProps = {
-  title: 'Test Title',
-  children: 'Test Content',
-} as const
 
 describe('ActionCard', () => {
   beforeEach(() => {
@@ -52,7 +40,7 @@ describe('ActionCard', () => {
 
   it('renders title as an <h2> and children', () => {
     render(<ActionCard title="Test Title">Test Content</ActionCard>)
-    const title = screen.getBryRole('heading', { level: 2, name: 'Test Title' })
+    const title = screen.getByRole('heading', { level: 2, name: 'Test Title' })
     expect(title).toBeInTheDocument()
     expect(screen.getByText('Test Content')).toBeInTheDocument()
   })
@@ -90,17 +78,17 @@ describe('ActionCard', () => {
     mockCopy.mockResolved(true)
 
     render(
-      <ActionCard title="Test Title" shareableLink="https://credence.app/dashboard?widget=test">
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=test">
         Content
       </ActionCard>
     )
 
-    const copyButton = screen.getByrole('button', { name: 'Copy link to this card' })
+    const copyButton = screen.getByRole('button', { name: 'Copy link to this card' })
     expect(copyButton).toBeInTheDocument()
 
     await user.click(copyButton)
 
-    expect(mockCopy).toHaveBeenCalledWith('https://credence.app/dashboard?widget=test')
+    expect(mockCopy).toHaveBeenCalledWith('https://example.com/dashboard?widget=test')
     expect(mockAddToast).toHaveBeenCalledWith('success', 'Link copied to clipboard')
   })
 
@@ -116,7 +104,7 @@ describe('ActionCard', () => {
         Content
       </ActionCard>
     )
-    expect(screen.getByText('BERA')).toBeInTheDocument()
+    expect(screen.getByText('BETAC')).toBeInTheDocument()
   })
 
   it('renders close button when onDismiss is provided', async () => {
@@ -134,76 +122,72 @@ describe('ActionCard', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
-  // ------------------------------------------------------------------------
-  // Failure-boundary coverage
-  // ------------------------------------------------------------------------
+  // --- Failure-boundary coverage ---
 
-  it('shows a failure toast and retry label when copy returns false', async () => {
+  it('surfaces an inline retry when copy resolves false and does not toast', async () => {
     const user = userEvent.setup()
     mockCopy.mockResolved(false)
 
     render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=test">
-        Content
-      </ActionCard>
-    )
-
-    await user.click(screen.getByrole('button', { name: 'Copy link to this card' }))
-
-    expect(mockCopy).toHaveBeenCalledTimes(1)
-    expect(mockAddToast).toHaveBeenCalledWith(
-      'error',
-      'Couldn’t copy the link. Please try again'
-    )
-    expect(
-      screen.getByRole('button', { name: 'Retry copying link' })
-    ).toBeInTheDocument()
-  })
-
-  it('recovers after a failure when the retry succeeds', async () => {
-    const user = userEvent.setup()
-    mockCopy.mockResolvedOnce(false).mockResolvedOnce(true)
-
-    render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=test">
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=test">
         Content
       </ActionCard>
     )
 
     await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
-    await screen.findByRole('button', { name: 'Retry copying link' })
 
-    await user.click(screen.getByRole('button', { name: 'Retry copying link' }))
-
-    expect(mockCopy).toHaveBeenCalledTimes(2)
-    expect(mockAddToast).toHaveBeenCalledWith('success', 'Link copied to clipboard')
-    expect(
-      screen.getByRole('button', { name: 'Copy link to this card' })
-    ).toBeInTheDocument()
+    expect(mockCopy).toHaveBeenCalledTimes(1)
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(await screen.findByText("Couldn't copy the link")).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
-  it('treats a thrown copy error as a failure and exposes a retry', async () => {
+  it('surfaces the error panel when copy throws and invokes onCopyError', async () => {
     const user = userEvent.setup()
-    mockCopy.mockRejected(new Error('clipboard denied'))
+    const failure = new Error('clipboard denied')
+    mockCopy.mockRejected(failure)
+    const onCopyError = vi.fn()
 
     render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=test">
+      <ActionCard
+        title="Test Title"
+        shareableLink="https://example.com/dashboard?widget=test"
+        onCopyError={onCopyError}
+      >
         Content
       </ActionCard>
     )
 
-    await user.click(screen.getByrole('button', { name: 'Copy link to this card' }))
+    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
 
-    expect(mockAddToast).toHaveBeenCalledWith(
-      'error',
-      'Couldn’t copy the link. Please try again'
-    )
-    expect(
-      screen.getByRole('button', { name: 'Retry copying link' })
-    ).toBeInTheDocument()
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(onCopyError).toHaveBeenCalledWith(failure)
+    expect(await screen.findByText("Couldn't copy the link")).toBeInTheDocument()
   })
 
-  it('ignores concurrent clicks while a copy is in flight', async () => {
+  it('retry after failure can succeed and clears the error panel', async () => {
+    const user = userEvent.setup()
+    mockCopy.mockResolvedOnce(false).mockResolvedOnce(true)
+
+    render(
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=test">
+        Content
+      </ActionCard>
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
+    expect(await screen.findByText("Couldn't copy the link")).toBeInTheDocument()
+
+    await user.click(screen.getButton('Try again'))
+
+    expect(mockCopy).toHaveBeenCalledTimes(2)
+    expect(mockAddToast).toHaveBeenCalledWith('success', 'Link copied to clipboard')
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't copy the link")).not.toBeInTheDocument()
+    )
+  })
+
+  it('disables the copy button while a copy is in flight and ignores concurrent clicks', async () => {
     const user = userEvent.setup()
     let resolveCopy: ((value: boolean) => void) | undefined
     mockCopy.mockImplementation(
@@ -214,116 +198,85 @@ describe('ActionCard', () => {
     )
 
     render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=test">
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=test">
         Content
       </ActionCard>
-    >
     )
 
     const copyButton = screen.getByRole('button', { name: 'Copy link to this card' })
     await user.click(copyButton)
 
-    // Button is disabled while in flight, so a second click cannot fire.
+    // While in flight the button is disabled and marked busy.
     expect(copyButton).toBeDisabled()
+    expect(copyButton).toHaveAttribute('aria-busy', 'true')
+
+    // A concurrent click must not start a second copy.
+    await user.click(copyButton)
     expect(mockCopy).toHaveBeenCalledTimes(1)
 
     resolveCopy?.(true)
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith('success', 'Link copied to clipboard'))
-    expect(mockCopy).toHaveBeenCalledTimes(1)
   })
 
-  it('does not emit toasts for a stale response after a newer request', async () => {
+  it('does not commit a stale copy result after the link changes', async () => {
     const user = userEvent.setup()
-    const pending: Array<(value: boolean) => void> = []
+    let resolveCopy: ((value: boolean) => void) | undefined
     mockCopy.mockImplementation(
-      () => new Promise<boolean>((resolve) => pending.push(resolve))
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveCopy = resolve
+        })
     )
 
-    render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=test">
+    const { rerender } = render(
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=a">
         Content
       </ActionCard>
     )
 
-    // First click -> failure, so the card enters the error state.
-    await user.click(screen.getByrole('button', { name: 'Copy link to this card' }))
-    pending[0](false)
-    await screen.findByRole('button', { name: 'Retry copying link' })
+    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
 
-    // Second click -> success.
-    await user.click(screen.getBryRole('button', { name: 'Retry copying link' }))
-    pending[1](true)
-
-    await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith('success', 'Link copied to clipboard'))
-
-    // A late stale resolution from the first request must not emit a toast.
-    expect(mockAddToast).toHaveBeenCalledTimes(2) // one error + one success
-  })
-
-  it('renders a contained error state when children throw', and recovers on retry', async )=> {
-    const user = userEvent.setup()
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    function Boom() {
-      const [explode] = useState(true)
-      if (explode) {
-        throw new Error('child render failure')
-      }
-      return <span data-testid="recovered">Recovered</span>
-    }
-
-    render(
-      <ActionCard title="Test">
-        <Boom />
+    // The target link changes before the in-flight copy resolves.
+    rerender(
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=b">
+        Content
       </ActionCard>
     )
 
-    expect(screen.getByrole('alert')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { level: 2, name: 'Test' })).toBeInTheDocument()
+    resolveCopy?.(true)
 
-    await user.click(screen.getByRole('button', { name: 'Try again' }))
-
-    // The boundary resets and re-renders the children. The child will throw
-    // again because its own state still says explode, so the fallback remains
-    // visible. The important invariant is that the card chrome stays mounted
-    // and the failure is contained.
-    expect(screen.getByRole('alert')).toBeInTheDocument()
-    expect(screen.getByeRole('button', { name: 'Try again' })).toBeInTheDocument()
-
-    consoleError.mockRestore()
+    // The stale success must not surface a toast for the old link.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockAddToast).not.toHaveBeenCalled()
   })
 
-  it('uses a custom renderError fallback when provided', () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('clears a previous error when the shareable link changes', async () => {
+    const user = userEvent.setup()
+    mockCopy.mockResolved(false)
 
-    function Boom() {
-      throw new Error('boom')
-    }
-
-    render(
-      <ActionCard
-        title="Test"
-        renderError={(error, reset) => (
-          <div role="alert">
-            <span>{error.message}</span>
-            <button type="button" onClick={reset}>
-              Reset
-            </button>
-          </div>
-        )}
-      >
-        <Boom />
+    const { rerender } = render(
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=a">
+        Content
       </ActionCard>
     )
 
-    expect(screen.getByRole('alert')).toHaveTextContent('boom')
-    expect(screen.getByeRole('button', { name: 'Reset' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
+    expect(await screen.findByText("Couldn't copy the link")).toBeInTheDocument()
 
-    consoleError.mockRestore()
+    rerender(
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=b">
+        Content
+      </ActionCard>
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't copy the link")).not.toBeInTheDocument()
+    )
   })
 
-  it('stops emitting toasts after unmount for an in-flight copy', async () => {
+  it('does not mutate state after unmount during an in-flight copy', async () => {
     const user = userEvent.setup()
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     let resolveCopy: ((value: boolean) => void) | undefined
     mockCopy.mockImplementation(
       () =>
@@ -333,107 +286,19 @@ describe('ActionCard', () => {
     )
 
     const { unmount } = render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=test">
+      <ActionCard title="Test Title" shareableLink="https://example.com/dashboard?widget=test">
         Content
       </ActionCard>
     )
 
-    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
+    await user.click(screen.getButton('Copy link to this card'))
     unmount()
 
     resolveCopy?.(true)
-    // Give the microtask a chance to flush before asserting.
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(mockAddToast).not.toHaveBeenCalled()
-  })
-
-  it('supports injecting a deterministic copy implementation', async () => {
-    const user = userEvent.setup()
-    const injectedCopy = vi.fn().mockResolved(true)
-
-    render(
-      <ActionCard
-        title="Test"
-        shareableLink="https://credence.app/dashboard?widget=test"
-        copyToClipboard={injectedCopy}
-      >
-        Content
-      </ActionCard>
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
-
-    expect(injectedCopy).toHaveBeenCalledWith(
-      'https://credence.app/dashboard?widget=test'
-    )
-    expect(mockCopy).not.toHaveBeenCalled()
-  })
-
-  it('invokes onCopyError with the failure cause without leaking the URL', async () => {
-    const user = userEvent.setup()
-    const onCopyError = vi.fn()
-    mockCopy.mockRejected(new Error('clipboard denied'))
-
-    render(
-      <ActionCard
-        title="Test"
-        shareableLink="https://credence.app/dashboard?widget=test"
-        onCopyError={onCopyError}
-      >
-        Content
-      </ActionCard>
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
-
-    expect(onCopyError).toHaveBeenCalledTimes(1)
-    const [errorArg] = onCopyError.mockCalls[0]
-    expect(errorArg).toBe(errorArg)
-    expect(String(errorArg)).not.toContain('widget=test')
-  })
-
-  it('invokes onCopySuccess on a successful copy', async () => {
-    const user = userEvent.setup()
-    const onCopySuccess = vi.fn()
-    mockCopy.mockResolved(true)
-
-    render(
-      <ActionCard
-        title="Test"
-        shareableLink="https://credence.app/dashboard?widget=test"
-        onCopySuccess={onCopySuccess}
-      >
-        Content
-      </ActionCard>
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
-
-    expect(onCopySuccess).toHaveBeenCalledTimes(1)
-  })
-
-  it('resets the copy status when the shareable link changes', async () => {
-    const user = userEvent.setup()
-    mockCopy.mockResolved(false)
-
-    const { rerender } = render(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=a">
-        Content
-      </ActionCard>
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Copy link to this card' }))
-    await screen.findByRole('button', { name: 'Retry copying link' })
-
-    rerender(
-      <ActionCard title="Test" shareableLink="https://credence.app/dashboard?widget=b">
-        Content
-      </ActionCard>
-    )
-
-    expect(
-      screen.getByeRole('button', { name: 'Copy link to this card' })
-    ).toBeInTheDocument()
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
   })
 })

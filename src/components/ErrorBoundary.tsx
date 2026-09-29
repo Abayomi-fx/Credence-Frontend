@@ -8,26 +8,38 @@ interface Props {
   fallback?: (error: Error, reset: () => void) => ReactNode
   /**
    * Optional telemetry sink. When provided, it is invoked once per caught
-   * error with a sanctioned payload. The default behaviour logs to the
-   * console so failures remain diagnosable without exposing sensitive data.
+   * error with a safe, non-sensitive payload. When omitted, the boundary
+   * falls back to a console error so failures remain diagnosable in dev.
    */
-  onError?: (error: Error, info: React.ErrorInfo) => void
+  onError?: (payload: ErrorBoundaryTelemetry) => void
   /**
-   * Optional reset hook invoked after the boundary recovers. Useful for
-   * invalidating caches or re-fetching data that may have caused the error.
+   * Maximum number of automatic re-mount attempts before the boundary
+   * stops retrying and surfaces a terminal failure state. Defaults to 1.
    */
-  onReset?: () => void
+  maxRetries?: number
+}
+
+export interface ErrorBoundaryTelemetry {
+  /** Error class name (e.g. 'Error', 'ChunkLoadError'). Never the message. */
+  name: string
+  /** Classified error kind for dashboard grouping. */
+  kind: ErrorStateKind
+  /** Classified severity for alerting. */
+  severity: ErrorStateSeverity
+  /** Number of retry attempts already made for this failure chain. */
+  retryCount: number
+  /** Whether the boundary has exhausted its retry budget. */
+  exhausted: boolean
 }
 
 interface BoundaryState {
   hasError: boolean
   error: Error | null
   /**
-   * Monotonically increasing reset counter. It is used as a child key so
-   * the subtree re-mounts on every retry and as a guard against unbounded
-   * retry loops.
+   * Number of reset attempts made since the last successful render.
+   * Used to enforce the retry budget and guarantee termination.
    */
-  resetCount: number
+  retryCount: number
 }
 
 interface ClassifiedError {
@@ -36,30 +48,26 @@ interface ClassifiedError {
 }
 
 /**
- * Maximum number of automatic retries before the boundary stops re-mounting
- * the subtree and instead surfaces a deterministic "give up" message. This
- * prevents a tight crash/retry loop from consuming the main thread.
- */
-const MAX_RESET_ATTEMPTS = 3
-
-/**
- * Catches render/lifecycle errors in its subtree and shows a branded
- * ErrorState fallback with a retry action and a home link.
- *
- * Calling retry resets internal state so the subtree re-mounts without a
- * hard reload. If the re-mounted subtree throws again the boundary catches
- * it once more, up to MAX_RESET_ATTEMPTS times. After that the retry action
- * is disabled and the user is directed to a full reload.
+ * Deterministic failure-boundary coverage for the app subtree.
  *
  * Invariants:
- *  • hasPropError is the only source of truth for whether the fallback
-    renders. error is never null when hasError is true.
-  • Resets are monotonic and bounded; the boundary cannot loop forever.
-  • Telemetry never receives raw error objects or user data; only a
-    sanctioned message/name/component stack string.
+ *  1. A caught error always produces a rendered fallback - never a blank
+  *     screen and never a silent swallowed failure.
+ *  2. Retry is bounded by `maxRetries` so a persistently throwing subtree
+ *     cannot loop forever. Once the budget is exhausted the fallback switches
+  *     to a terminal copy and the retry action is removed.
+ *  3. Telemetry never includes the error message or component stack - only
+ *     the class name and classification - so sensitive data is not leaked.
+ *  4. Reset is idempotent: calling it when no error is present is a no-op.
  */
 export default class ErrorBoundary extends Component<Props, BoundaryState> {
-  state: BoundaryState = { hasError: false, error: null, resetCount: 0 }
+  state: BoundaryState = { hasError: false, error: null, retryCount: 0 }
+
+  private get maxRetries(): number {
+    const raw = this.props.maxRetries
+    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return 1
+    return Math.floor(raw)
+  }
 
   private isChunkLoadError(error: Error): boolean {
     const message = (error.message ?? '').toLowerCase()
@@ -93,118 +101,147 @@ export default class ErrorBoundary extends Component<Props, BoundaryState> {
     return { kind: 'generic', severity: 'danger' }
   }
 
+  static getDerivedStateFromError(error: Error): Partial<BoundaryState> {
+    return { hasError: true, error: ErrorBoundary.normalizeError(error) }
+  }
+
   /**
-   * Normalise an arbitrary thrown value into an Error. React guarantees an
-   * Error in getDerivedStateFromError, but third-party code or manual
-   * invocations may pass non-Error values. Keeping this total prevents a
-   * secondary crash inside the boundary itself.
+   * Normalise arbitrary thrown values into an Error instance so downstream
+   * code can rely on `.name` and `.message` without defensive checks.
    */
-  private normaliseError(value: unknown): Error {
+  private static normalizeError(value: unknown): Error {
     if (value instanceof Error) return value
     if (typeof value === 'string') return new Error(value)
     try {
-      return new Error(JSON.stringify(value))
+      return new Error(typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value))
     } catch {
       return new Error('Unknown error')
     }
   }
 
-  /**
-   * Strip potentially sensitive details from an error message before it
-   * reaches telemetry or the console. This keeps the failure diagnosable
-   * without exposing tokens, emails, or URLs that may carry credentials.
-   */
-  private sanctiseMessage(message: string): string {
-    return message
-      .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9._%-]+\.[a-zA-Z]{2,}/g, '[redacted-email]')
-      .replace(/\bBearer\s+[A-Za-z0-9-._~+/=]+/gi, 'Bearer [redacted]')
-      .replace(/\b(token|apikey|secret|password|authorization)\s*[:=]\s*\S+/gi, '$1 [redacted]')
-      .slice(0, 500)
-  }
-
-  static getDerivedStateFromError(error: Error): Partial<BoundaryState> {
-    return { hasError: true, error: error }
-  }
-
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    const normalised = this.normaliseError(error)
-    const safeMessage = this.sanctiseMessage(normalised.message)
-    const safeStack = this.sanctiseMessage(info.componentStack ?? '')
+    const normalized = ErrorBoundary.normalizeError(error)
+    const { kind, severity } = this.classifyError(normalized)
+    const retryCount = this.state.retryCount
+    const exhausted = retryCount >= this.maxRetries
 
-    if (this.props.onError) {
-      this.props.onError(normalised, info)
+    const payload: ErrorBoundaryTelemetry = {
+      name: normalized.name || 'Error',
+      kind,
+      severity,
+      retryCount,
+      exhausted,
+    }
+
+    try {
+      if (this.props.onError) {
+        this.props.onError(payload)
+      } else {
+        // Dev-only diagnostic - do not log the full message in production.
+        // eslint-disable-next-line no-console
+        console.error('[ErrorBoundary]', payload.name, kind, severity, retryCount)
+      }
+    } catch {
+      // Telemetry must never break the fallback render.
+    }
+
+    // info.componentStack is deliberately not forwarded to telemetry to
+    // avoid leaking internal component names and props to external sinks.
+    void info
+  }
+
+  /**
+   * Reset the boundary so the subtree re-mounts. Idempotent when no error
+   * is present. Bounded by `maxRetries` to guarantee termination.
+   */
+  private handleReset = (): void => {
+    const { hasError } = this.state
+    if (!hasError && this.state.error === null) return
+
+    const nextRetryCount = this.state.retryCount + 1
+    if (nextRetryCount > this.maxRetries) {
+      // Budget exhausted - keep the error visible but stop auto-retrying.
+      this.setState({ retryCount: this.maxRetries })
       return
     }
 
-    // Default telemetry: structured, sanitised, and safe to log.
-    console.error('[ErrorBoundary]', {
-      name: normalised.name,
-      message: safeMessage,
-      componentStack: safeStack,
-      resetCount: this.state.resetCount,
-    })
+    this.setState({ hasError: false, error: null, retryCount: nextRetryCount })
   }
 
-  private handleReset = (): void => {
-    this.setState((prev) => ({
-      hasError: false,
-      error: null,
-      resetCount: prev.resetCount + 1,
-    }))
-    this.props.onReset?.()
+  /**
+   * Fully clear the boundary and reset the retry budget. Used by the
+   * terminal fallback's "go home" action so a new failure chain gets a fresh
+   * budget.
+   */
+  private handleResetAll = (): void => {
+    this.setState({ hasError: false, error: null, retryCount: 0 })
+  }
+
+  private get isExhausted(): boolean {
+    return this.state.retryCount >= this.maxRetries
+  }
+
+  private renderTerminalFallback(): ReactNode {
+    const { error } = this.state
+    const normalized = error ?? new Error('Unknown error')
+    const { kind, severity } = this.classifyError(normalized)
+
+    return (
+      <div className="error-fallback-container" data-error-boundary="true" data-error-terminal="true">
+        <ErrorState
+          type={kind}
+          severity={severity}
+          title="Something went wrong"
+          message="The app hit an unexpected error and couldn’t recover on its own. Reload the page or head back to the home page."
+          ariaLabel="Application error"
+        />
+        <a className="error-fallback-secondary-link" href="/" onClick={this.handleResetAll}>
+          Go to home page
+        </a>
+      </div>
+    )
   }
 
   render(): ReactNode {
-    const { hasError, error, resetCount } = this.state
+    const { hasError, error } = this.state
     const { children, fallback } = this.props
 
     if (hasError && error) {
-      if (fallback) return fallback(error, this.handleReset)
+      if (fallback) {
+        // Custom fallbacks receive the reset callback and are responsible
+        // for their own retry semantics. We still bound the auto-retry
+        // budget via handleReset.
+        return fallback(error, this.handleReset)
+      }
+
+      if (this.isExhausted) {
+        return this.renderTerminalFallback()
+      }
 
       const { kind, severity } = this.classifyError(error)
-      const exhausted = resetCount >= MAX_RESET_ATTEMPTS && this.isChunkLoadError(error)
 
       // The whole-app-crash fallback needs stronger wording than the
-      // single-section generic copy (cf. docs/UI_STATES_GUIKE.md "Error
+      // single-section generic copy (cf. docs/UI_STATES_GUIDE.md "Error
       // Boundary Strategy"). We pin the title + message so the user
       // understands the panel is an app-level fallback, not a localized
-      // data-fetch failure — the underlying kind still drives the icon.
+      // data-fetch failure — the underlying `kind` still drives the icon.
       return (
         <div className="error-fallback-container" data-error-boundary="true">
           <ErrorState
             type={kind}
             severity={severity}
             title="Something went wrong"
-            message={
-              exhausted
-                ? 'The app hit an unexpected error and couldn’t recover after several retries. Please reload the page or head back to the home page.'
-                : 'The app hit an unexpected error and couldn’t recover on its own. Try again, and if it persists, head back to the home page.'
-            }
+            message="The app hit an unexpected error and couldn’t recover on its own. Try again, and if it persists, head back to the home page."
             ariaLabel="Application error"
-            action={
-              exhausted
-                ? { label: 'Reload page', onClick: () => window.location.reload() }
-                : {}
-            }
+            action={{ label: 'Try again', onClick: this.handleReset }}
           />
-          {!exhausted && (
-            <button
-              className="error-fallback-retry"
-              type="button"
-              onClick={this.handleReset}
-            >
-              Try again
-            </button>
-          )}
-          <a className="error-fallback-secondary-link" href="/">
+          <a className="error-fallback-secondary-link" href="/" onClick={this.handleResetAll}>
             Go to home page
           </a>
         </div>
       )
     }
 
-    // Key the subtree on the reset counter so a retry forces a clean
-    // re-mount and any stale child state is discarded.
-    return <React.Fragment key={resetCount}>{children}</React.Fragment>
+    return children
   }
 }
