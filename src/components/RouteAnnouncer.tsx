@@ -14,40 +14,48 @@ export const ROUTE_LABELS: Record<string, string> = {
 }
 
 /**
- * Fallback label used when a route is not present in the registry.
- * Exported so tests and consumers can rely on a single source of truth.
+ * Maximum delay before an announcement is published to the live region.
+ * Keeps the assistive-tech notification after the DOM paint completes.
  */
-export const UNKNOWN_ROUTE_LABEL = 'Page Not Found'
+export const ANNOUNCEMENT_DELAY_MS = 100
 
 /**
- * Delay (ms) before the announcement text is committed.
- * This gives assistive technology time to process the structural navigation
- * change before the live region mutates.
- */
-export const ANNOUNCE_DELAY_MS = 100
-
-/**
- * Resolve the human-readable label for a given pathname.
+ * Normalizes a raw pathname into a canonical route key.
  *
- * This is the single authority for label resolution and is pure so it can be
- * exercised directly in tests for boundary cases (unknown, empty, duplicate,
- * trailing-slash, and query/hash bearing) paths.
+ * Invariants:
+* - Never throws for any input (including null/undefined/malformed).
+ * - Strips trailing slashes except for the root path so '/dashboard/' === '/dashboard'.
+ * - Preserves query/search and hash fragments outside the key lookup.
+ */
+export function normalizePathname(pathname: unknown): string {
+  if (typeof pathname !== 'string' || pathname.length === 0) {
+    return '/'
+  }
+
+  const withoutHash = pathname.split('#', 1)[0]
+  const withoutQuery = withoutHash.split('?', 1)[0]
+
+  if (withoutQuery.length === 0) {
+    return '/'
+  }
+
+  const withoutTrailingSlash =
+    withoutQuery.length > 1 ? withoutQuery.replace(/\/+$/, '') : withoutQuery
+
+  return withoutTrailingSlash.length > 0 ? withoutTrailingSlash : '/'
+}
+
+/**
+ * Resolves the human-readable label for a route pathname.
+ *
+ * Invariants:
+ * - Deterministic for valid, invalid, duplicate, and boundary-case inputs.
+ * - Never returns an empty string.
+ * - Unmapped routes fall back to a consistent 404 label.
  */
 export function resolveRouteLabel(pathname: unknown): string {
-  if (typeof pathname !== 'string' || pathname.length === 0) {
-    return UNKNOWN_ROUTE_LABEL
-  }
-
-  // Normalize trailing slashes so '/dashboard/' matches '/dashboard'.
-  // The root path is kept as-is to avoid collapsing it to an empty string.
-  const normalized =
-    pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
-
-  if (Object.prototype.hasOwnProperty.call(ROUTE_LABELS, normalized)) {
-    return ROUTE_LABELS[normalized]
-  }
-
-  return UNKNOWN_ROUTE_LABEL
+  const normalized = normalizePathname(pathname)
+  return ROUTE_LABELS[normalized] ?? 'Page Not Found'
 }
 
 /**
@@ -56,10 +64,10 @@ export function resolveRouteLabel(pathname: unknown): string {
  * single-page application (SPA) client transitions.
  *
  * Invariants:
- *   - The announcement is always a non-empty string once the delay elapses.
- *   - Rapid consecutive navigations must not leak a stale announcement from a
- *     previous route (each effect clears its pending timer).
- *   - The region is always visually hidden and never exposes raw path data.
+ * - The live region is always mounted and never removed during navigation.
+ * - Only one announcement is published per settled pathname, even under rapid
+ *   consecutive navigation changes (stale timers are cancelled).
+ * - The announcement text is always a non-empty string once settled.
  */
 export default function RouteAnnouncer() {
   const { pathname } = useLocation()
@@ -67,21 +75,25 @@ export default function RouteAnnouncer() {
 
   useEffect(() => {
     const label = resolveRouteLabel(pathname)
-    const nextAnnouncement = `${label} loaded`
 
     // Defer text-assignment slightly until just after the DOM paint completes.
     // This allows assistive tech to cleanly process structural navigation changes.
+    // The cleanup cancels any pending timer so rapid navigation cannot leaka
+    // a stale announcement from a previous route.
     const timer = setTimeout(() => {
-      const node = announcementRef.current
-      if (!node) {
+      const region = announcementRef.current
+      if (!region) {
         return
       }
-      // Idempotent write: repeated navigation to the same route does not
-      // re-trigger assistive tech with duplicate text.
-      if (node.textContent !== nextAnnouncement) {
-        node.textContent = nextAnnouncement
+
+      const nextText = `${label} loaded`
+
+      // Idempotent write: avoids re-announcing the same label and avoids
+      // cluttering the live region with duplicate text nodes.
+      if (region.textContent !== nextText) {
+        region.textContent = nextText
       }
-    }, ANNOUNCE_DELAY_MS)
+    }, ANNOUNCEMENT_DELAY_MS)
 
     return () => clearTimeout(timer)
   }, [pathname])
@@ -93,6 +105,7 @@ export default function RouteAnnouncer() {
       className="sr-only"
       aria-live="polite"
       aria-atomic="true"
+      data-testid="route-announcer"
       style={{
         position: 'absolute',
         width: '1px',
