@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, it, expect } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
 import { FormField } from './FormField'
 
 describe('FormField Accessibility', () => {
@@ -220,3 +220,56 @@ describe('FormField Accessibility', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
+
+
+describe('FormField Additional States', () => {
+  it('disables input and sets aria-busy when loading', () => {
+    render(
+      <FormField id='test-field' label='Test Label' loading>
+        <input data-testid='child-input' />
+      </FormField>
+    )
+
+    const input = screen.getByTestId('child-input')
+    expect(input).toHaveAttribute('disabled')
+    expect(document.querySelector('.form-field')).toHaveAttribute('aria-busy', 'true')
+    expect(document.querySelector('.form-field')).toHaveClass('is-loading')
+  })
+
+  it('renders stale state', () => {
+    render(
+      <FormField id='test-field' label='Test Label' stale>
+        <input data-testid='child-input' />
+      </FormField>
+    )
+
+    expect(document.querySelector('.form-field')).toHaveClass('is-stale')
+  })
+
+  it('renders permission error and disables input', () => {
+    render(
+      <FormField id='test-field' label='Test Label' permission='Not authorized'>
+        <input data-testid='child-input' />
+      </FormField>
+    )
+
+    const input = screen.getByTestId('child-input')
+    expect(input).toHaveAttribute('disabled')
+    expect(screen.getByRole('status')).toHaveTextContent('Not authorized')
+    expect(document.querySelector('.form-field')).toHaveAttribute('data-state', 'permission')
+  })
+
+  it('calls onRetry when retry button is clicked in error state', () => {
+    const handleRetry = vi.fn()
+    render(
+      <FormField id='test-field' label='Test Label' error='Failed' onRetry={handleRetry}>
+        <input data-testid='child-input' />
+      </FormField>
+    )
+
+    const retryBtn = screen.getByRole('button', { name: 'Retry Test Label' })
+    fireEvent.click(retryBtn)
+    expect(handleRetry).toHaveBeenCalledTimes(1)
+  })
+})
+
