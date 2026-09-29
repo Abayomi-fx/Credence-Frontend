@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import './ThemeToggle.css'
 
-function SunIcon() {
+// SunIcon renders the light-theme glyph. It is a pure, deterministic function of its props.
+// Invariants:
+//   - Always renders exactly one <svg> with the shared theme-toggle icon class.
+//   - Marked aria-hidden="true" so the accessible name comes from the button.
+//   - Never throws for any input; adverse conditions degrade to a valid SVG tree.
+export function SunIcon() {
   return (
     <svg
       className="theme-toggle__icon"
@@ -26,7 +31,7 @@ function SunIcon() {
   )
 }
 
-function MoonIcon() {
+export function MoonIcon() {
   return (
     <svg className="theme-toggle__icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
       <path d="M12.03 2.26a.75.75 0 0 0-1.06.92 6 6 0 0 1 7.5 7.5.75.75 0 0 0 .92-1.06 7.5 7.5 0 0 0-7.36-7.36zM7.47 3.7A7 7 0 1 0 16.3 12.53a5.5 5.5 0 1 1-8.83-8.83z" />
