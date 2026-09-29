@@ -162,15 +162,23 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
     return () => clearTimer()
   }, [startTimer, clearTimer])
 
-  const handleMouseEnter = () => {
-    isHoveredRef.current = true
-    updateTimerState()
-  }
+  const handleMouseEnter = useCallback(() => {
+    try {
+      isHoveredRef.current = true
+      updateTimerState()
+    } catch (error) {
+      console.error('Failed to handle mouse enter boundary:', error)
+    }
+  }, [updateTimerState])
 
-  const handleMouseLeave = () => {
-    isHoveredRef.current = false
-    updateTimerState()
-  }
+  const handleMouseLeave = useCallback(() => {
+    try {
+      isHoveredRef.current = false
+      updateTimerState()
+    } catch (error) {
+      console.error('Failed to handle mouse leave boundary:', error)
+    }
+  }, [updateTimerState])
 
   const handleFocus = () => {
     isFocusedRef.current = true

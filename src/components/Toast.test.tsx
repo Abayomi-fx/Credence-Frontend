@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Toast, { type ToastSeverity } from './Toast'
@@ -129,6 +129,32 @@ describe('Toast', () => {
       expect(onDismiss).toHaveBeenCalledTimes(1)
       expect(onDismiss).toHaveBeenCalledWith(toast.id)
     } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('provides deterministic failure-boundary coverage for handleMouseLeave', () => {
+    vi.useFakeTimers()
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { toast, onDismiss } = renderToast('info', 'Boundary toast', 3000)
+      const toastEl = screen.getByRole('status')
+
+      // Trigger mouse enter
+      fireEvent.mouseEnter(toastEl)
+      vi.advanceTimersByTime(2000)
+      expect(onDismiss).not.toHaveBeenCalled()
+
+      // Trigger mouse leave
+      fireEvent.mouseLeave(toastEl)
+      vi.advanceTimersByTime(3000)
+      expect(onDismiss).toHaveBeenCalledWith(toast.id)
+
+      // Trigger mouse leave again as boundary test
+      fireEvent.mouseLeave(toastEl)
+      expect(consoleSpy).not.toHaveBeenCalled()
+    } finally {
+      consoleSpy.mockRestore()
       vi.useRealTimers()
     }
   })
