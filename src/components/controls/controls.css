@@ -128,6 +128,15 @@
   border-color: var(--credence-color-danger-border) !important;
 }
 
+/* Error text renders below the switch. The wrapper is inline-block, so the
+   message needs its own line rather than sitting beside the control. */
+.control-toggle__error {
+  display: block;
+  margin-top: var(--credence-space-1);
+  font-size: 0.875rem;
+  color: var(--credence-color-danger-text);
+}
+
 .control-toggle-spinner {
   display: inline-block;
   width: 12px;
