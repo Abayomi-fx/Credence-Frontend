@@ -24,8 +24,22 @@ const TAG_LABELS: Record<ProductUpdate['tag'], string> = {
   fix: 'Fixed',
 }
 
-function formatDate(isoDate: string): string {
+export function formatDate(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`)
+  // A malformed feed entry must not crash the drawer (or surface the literal
+  // "Invalid Date"): fall back to the raw value so the failure is diagnosable.
+  if (Number.isNaN(date.getTime())) return isoDate
+  // `new Date('2023-02-29T00:00:00Z')` silently rolls over to March 1. Compare
+  // the calendar parts so an out-of-range date is surfaced verbatim instead of
+  // being silently re-dated.
+  const [year, month, day] = isoDate.slice(0, 10).split('-')
+  if (
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() + 1 !== Number(month) ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return isoDate
+  }
   return date.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
