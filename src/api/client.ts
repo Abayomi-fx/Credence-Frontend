@@ -68,6 +68,8 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
  * - `http_error` — the server answered with a non-2xx status.
  */
 export type ApiErrorCode = 'invalid_request_url' | 'network_error' | 'http_error'
+
+/**
  * Declaration of decimal amount fields for a request body.
  *
  * - `string[]`: field names validated with the default USDC rules.
@@ -279,8 +281,8 @@ export const API_BASE_URL = normalizeBaseUrl(env?.VITE_API_BASE_URL || '/api')
  * is inlined at build time, so stubbing `VITE_API_BASE_URL` from a test cannot
  * reach the module-load path that computes {@link API_BASE_URL}.
  */
-export function normalizeBaseUrl(value: string): string {
-  const trimmed = typeof value === 'string' ? value.trim() : ''
+export { normalizeBaseUrl }
+
 type ReplayEntry = {
   fingerprint: string
   promise: Promise<unknown>
@@ -539,9 +541,6 @@ function normalizeApiPath(path: string): string {
  */
 export function buildUrl(path: string, baseUrl: string = API_BASE_URL): string {
   return `${normalizeBaseUrl(baseUrl)}${normalizeApiPath(path)}`
-function buildUrl(path: string): string {
-  const normalizedPath = path.startsWith('/') ? path : '/' + path
-  return '' + API_BASE_URL + normalizedPath
 }
 
 function isJsonBody(body: ApiFetchOptions['body']): body is Record<string, unknown> | unknown[] {
@@ -633,7 +632,6 @@ function applyAmountFields(
   return wireBody
 }
 
-function buildHeaders(headers: HeadersInit | undefined, hasJsonBody: boolean): Headers {
 function buildHeaders(
   headers: HeadersInit | undefined,
   hasJsonBody: boolean,
@@ -733,7 +731,8 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, headers, skipRateLimit, amountFields, ...init } = options
+  const { body, headers, idempotencyKey, skipRateLimit, amountFields, identityEpoch, ...init } =
+    options
 
   // Exact-amount gate: validate and canonicalize declared amount fields
   // BEFORE any state change. An invalid amount must never consume
@@ -741,23 +740,23 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   // caller's body object.
   const wireBody = applyAmountFields(body, amountFields)
   const hasJsonBody = isJsonBody(wireBody)
-  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, ...init } = options
-  const hasJsonBody = isJsonBody(body)
+
+  // Validate input size before expensive operations. Serializing an oversized
+  // body is wasted work and could exhaust memory or downstream resources.
+  let serializedBody: BodyInit | undefined
+  if (hasJsonBody) {
+    const serialized = JSON.stringify(wireBody)
+    const byteLength = new TextEncoder().encode(serialized).byteLength
+    if (byteLength > MAX_REQUEST_BODY_BYTES) {
+      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: byteLength })
+    }
+    serializedBody = serialized
+  } else {
+    serializedBody = wireBody ?? undefined
+  }
 
   // Pre-flight: deterministic, request-independent failures.
   const url = buildUrl(path)
-  const requestHeaders = buildHeaders(headers, hasJsonBody)
-  const requestBody = hasJsonBody ? JSON.stringify(body) : body
-  // Validate input size before expensive operations. Serializing an oversized
-  // body is wasted work and could exhaust memory or downstream resources.
-  if (hasJsonBody) {
-    const serialized = JSON.stringify(body)
-    if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BODY_BYTES) {
-      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serialized.length })
-    }
-  }
-
-  const serializedBody = hasJsonBody ? JSON.stringify(body) : (body ?? undefined)
   const correlationId = generateCorrelationId('api-fetch')
   const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
@@ -771,7 +770,6 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     }
 
     const existing = replayEntries.get(normalizedKey)
-    const url = buildUrl(path)
     const fingerprint = requestFingerprint(url, { ...init, method }, serializedBody, requestHeaders)
 
     if (existing) {
@@ -798,7 +796,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     return requestPromise
   }
 
-  return apiFetchWithoutReplay<T>(buildUrl(path), init, requestHeaders, serializedBody, {
+  return apiFetchWithoutReplay<T>(url, init, requestHeaders, serializedBody, {
     correlationId,
     path,
     method,
@@ -854,14 +852,11 @@ async function apiFetchWithoutReplay<T>(
   try {
     response = await fetch(url, {
       ...init,
-      headers: requestHeaders,
-      body: requestBody,
-      headers: buildHeaders(headers, hasJsonBody),
-      body: hasJsonBody ? JSON.stringify(wireBody) : wireBody,
       headers,
       body: serializedBody,
     })
   } catch (error) {
+    // Preserve AbortError unchanged — callers may inspect it directly.
     if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') {
       emitWalletSessionEvent('action_failed', {
         address: null,
@@ -871,15 +866,15 @@ async function apiFetchWithoutReplay<T>(
       })
       throw error
     }
+    // Network transport failure: wrap in ApiError with deterministic classification.
     const message = error instanceof Error ? error.message : 'Network request failed'
-    throw new ApiError(0, message, error, 'network_error')
     emitWalletSessionEvent('action_failed', {
       address: null,
       network: null,
       correlationId: ctx.correlationId,
       metadata: { path: ctx.path, method: ctx.method, status: 0, message },
     })
-    throw new ApiError(0, message, error)
+    throw new ApiError(0, message, error, 'network_error')
   }
 
   // Post-flight identity epoch check.
@@ -899,12 +894,6 @@ async function apiFetchWithoutReplay<T>(
   const payload = await parseResponse(response)
 
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      errorMessage(response.status, payload),
-      payload,
-      'http_error'
-    )
     const message = errorMessage(response.status, payload)
     emitWalletSessionEvent('action_failed', {
       address: null,
@@ -912,7 +901,7 @@ async function apiFetchWithoutReplay<T>(
       correlationId: ctx.correlationId,
       metadata: { path: ctx.path, method: ctx.method, status: response.status, message },
     })
-    throw new ApiError(response.status, message, payload)
+    throw new ApiError(response.status, message, payload, 'http_error')
   }
 
   emitWalletSessionEvent('action_succeeded', {
