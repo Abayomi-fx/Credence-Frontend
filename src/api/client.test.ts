@@ -759,6 +759,8 @@ describe('apiFetch pre-flight failure boundaries', () => {
       message: (first as ApiError).message,
     })
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('commits one effect when a keyed operation is duplicated or reordered', async () => {
     const committedKeys = new Set<string>()
     fetchMock.mockImplementation(async (_url, init) => {
