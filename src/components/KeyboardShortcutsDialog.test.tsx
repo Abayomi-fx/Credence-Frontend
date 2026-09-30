@@ -175,7 +175,7 @@ describe('KeyboardShortcutsDialog — focus management', () => {
     triggerEl.focus()
 
     const returnFocusRef = createRef<HTMLButtonElement>()
-    ;(returnFocusRef as React.MutableRefObject<HTMLButtonElement>).current = triggerEl
+      ; (returnFocusRef as React.MutableRefObject<HTMLButtonElement>).current = triggerEl
 
     const onClose = vi.fn()
     const { rerender } = render(
@@ -374,7 +374,7 @@ describe('KeyboardShortcutsDialog — focus management', () => {
     triggerEl.focus()
 
     const returnFocusRef = createRef<HTMLButtonElement>()
-    ;(returnFocusRef as React.MutableRefObject<HTMLButtonElement>).current = triggerEl
+      ; (returnFocusRef as React.MutableRefObject<HTMLButtonElement>).current = triggerEl
 
     const onClose = vi.fn()
     const { rerender } = render(
@@ -570,7 +570,7 @@ describe('KeyboardShortcutsDialog — focus management', () => {
     triggerEl.focus()
 
     const returnFocusRef = createRef<HTMLButtonElement>()
-    ;(returnFocusRef as React.MutableRefObject<HTMLButtonElement>).current = triggerEl
+      ; (returnFocusRef as React.MutableRefObject<HTMLButtonElement>).current = triggerEl
 
     const onClose = vi.fn()
     const { rerender } = render(
@@ -720,5 +720,65 @@ describe('KeyboardShortcutsDialog — formatModifierKey', () => {
     expect(formatModifierKey('Alt', userAgent)).toBe('Alt')
     expect(formatModifierKey('Shift', userAgent)).toBe('Shift')
     expect(formatModifierKey('K', userAgent)).toBe('K')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Failure Boundary & Resilience
+// ---------------------------------------------------------------------------
+
+describe('KeyboardShortcutsDialog — handleBackdropClick failure boundaries', () => {
+  it('deterministic valid input: clicking exactly on the backdrop triggers onClose', async () => {
+    const user = userEvent.setup()
+    const { onClose } = renderDialog()
+    const backdrop = screen.getByRole('dialog').parentElement!
+
+    await user.click(backdrop)
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('boundary-case/invalid input: event bubbling from child does NOT trigger onClose', async () => {
+    const user = userEvent.setup()
+    const { onClose } = renderDialog()
+
+    const header = screen.getByText('Keyboard Shortcuts')
+    await user.click(header)
+
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('duplicate/concurrent input: rapid successive clicks are processed deterministically', async () => {
+    const user = userEvent.setup()
+    const { onClose } = renderDialog()
+    const backdrop = screen.getByRole('dialog').parentElement!
+
+    await Promise.all([
+      user.click(backdrop),
+      user.click(backdrop),
+      user.click(backdrop)
+    ])
+
+    expect(onClose).toHaveBeenCalledTimes(3)
+  })
+
+  it('error state: exceptions inside onClose bubble up synchronously without corrupting internal state', async () => {
+    const user = userEvent.setup()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => { })
+
+    const mockError = new Error('simulated error during onClose')
+    const badOnClose = vi.fn().mockImplementation(() => {
+      throw mockError
+    })
+
+    const props = { open: true, onClose: badOnClose }
+    render(<KeyboardShortcutsDialog {...props} />)
+
+    const backdrop = screen.getByRole('dialog').parentElement!
+
+    await expect(user.click(backdrop)).rejects.toThrow(mockError)
+    expect(badOnClose).toHaveBeenCalledOnce()
+    expect(errorSpy).toHaveBeenCalledWith('KeyboardShortcutsDialog: Error closing dialog from backdrop', mockError)
+
+    errorSpy.mockRestore()
   })
 })
