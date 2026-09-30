@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { PrefetchNavLink } from '../PrefetchNavLink'
 import { PRELOADS_BY_PATH } from '../../config/routes'
@@ -7,10 +7,17 @@ import { useScrollPreserver } from '../../hooks/useScrollPreserver'
 import './MobileNav.css'
 import { useTranslation } from 'react-i18next'
 import { SECONDARY_NAV_LINKS } from '../../config/navLinks'
+import { DOM_EVENTS } from '../../events'
 
 export default function MobileNav() {
   const { t } = useTranslation()
-  const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(() => {
+    try {
+      return sessionStorage.getItem('mobileNavOpen') === 'true'
+    } catch {
+      return false
+    }
+  })
   const drawerRef = useRef<HTMLElement>(null)
   const hamburgerRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -18,36 +25,64 @@ export default function MobileNav() {
 
   useScrollPreserver({ isActive: isOpen })
 
-  // Close on route change
+  // Close on route change (SPA navigation) — but state survives full page reloads via sessionStorage
   const prevPath = useRef(location.pathname)
   if (prevPath.current !== location.pathname) {
     prevPath.current = location.pathname
     if (isOpen) setIsOpen(false)
   }
 
+  // Persist collapse state across full page reloads
+  useEffect(() => {
+    try {
+      if (isOpen) {
+        sessionStorage.setItem('mobileNavOpen', 'true')
+      } else {
+        sessionStorage.removeItem('mobileNavOpen')
+      }
+    } catch {
+      // sessionStorage unavailable
+    }
+  }, [isOpen])
+
   useEffect(() => {
     if (!isOpen) return
 
+    // Deterministic failure-boundary handling for the Escape key.
+    // Invariants:
+    //  - Only a single listener is registered per open cycle (cleanup below).
+    //  - Escape always closes the drawer exactly once, even if the event is
+    //    dispatched multiple times or while a close is already in flight.
+    //  - Errors thrown by downstream listeners never leave the drawer stuck
+    //    open; we guard the state transition and swallow listener errors.
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setIsOpen(false)
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setIsOpen((prev) => (prev ? false : prev))
+    }
+
+    const safeHandleKeyDown = (event: KeyboardEvent) => {
+      try {
+        handleKeyDown(event)
+      } catch {
+        // Failure boundary: never let a keydown handler crash the app or
+        // leave navigation state inconsistent.
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener(DOM_EVENTS.KEY_DOWN, safeHandleKeyDown)
+    return () => window.removeEventListener(DOM_EVENTS.KEY_DOWN, safeHandleKeyDown)
   }, [isOpen])
+
+  const close = useCallback(() => setIsOpen(false), [])
 
   useFocusTrap({
     containerRef: drawerRef,
     isActive: isOpen,
     initialFocusRef: closeButtonRef,
     returnFocusRef: hamburgerRef,
-    onEscape: () => setIsOpen(false),
+    onEscape: close,
   })
-
-  const close = () => setIsOpen(false)
 
   return (
     <>
