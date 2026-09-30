@@ -89,6 +89,7 @@ export default function ConfirmDialog({
   const [prevConfirmEnabled, setPrevConfirmEnabled] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isRetrying, setIsRetrying] = useState(false)
+  const submitAttemptRef = useRef(0)
 
   const handleCancel = useCallback(() => {
     onCancel()
@@ -111,6 +112,7 @@ export default function ConfirmDialog({
       setPrevConfirmEnabled(false)
       setSubmitError(null)
       setIsRetrying(false)
+      submitAttemptRef.current = 0
       return
     }
 
@@ -140,6 +142,7 @@ export default function ConfirmDialog({
     if (isSubmitting) {
       setSubmitError(null)
       setIsRetrying(false)
+      submitAttemptRef.current = 0
     }
   }, [isSubmitting, open])
 
@@ -147,25 +150,30 @@ export default function ConfirmDialog({
     if (!isConfirmEnabled) return
     if (isSubmitting) return
     setSubmitError(null)
+    const attemptId = ++submitAttemptRef.current
     try {
       const result = onConfirm() as unknown
       if (result && typeof (result as Promise<unknown>).then === 'function') {
         ;(result as Promise<unknown>).catch((err: unknown) => {
+          if (attemptId !== submitAttemptRef.current) return
           const message =
             err instanceof Error && err.message
               ? err.message
               : t('confirmDialog.errors.submitFailed')
           setSubmitError(message)
           setAnnouncement(t('confirmDialog.announcements.submitFailed'))
+          setIsRetrying(false)
         })
       }
     } catch (err) {
+      if (attemptId !== submitAttemptRef.current) return
       const message =
         err instanceof Error && err.message
           ? err.message
           : t('confirmDialog.errors.submitFailed')
       setSubmitError(message)
       setAnnouncement(t('confirmDialog.announcements.submitFailed'))
+      setIsRetrying(false)
     }
   }
 
@@ -177,12 +185,16 @@ export default function ConfirmDialog({
     handleConfirm()
   }
 
-  const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (isSubmitting) return
-    if (event.target === event.currentTarget) {
+  const handleBackdropClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      // Ignore clicks that did not originate on the backdrop itself (e.g. bubbled
+      // from the dialog) and ignore clicks while a submission is in flight.
+      if (event.target !== event.currentTarget) return
+      if (isSubmitting) return
       handleCancel()
-    }
-  }
+    },
+    [isSubmitting, handleCancel]
+  )
 
   if (!open) return null
 
