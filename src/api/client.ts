@@ -68,6 +68,8 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
  * - `http_error` — the server answered with a non-2xx status.
  */
 export type ApiErrorCode = 'invalid_request_url' | 'network_error' | 'http_error'
+
+/**
  * Declaration of decimal amount fields for a request body.
  *
  * - `string[]`: field names validated with the default USDC rules.
