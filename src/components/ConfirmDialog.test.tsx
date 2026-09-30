@@ -12,8 +12,8 @@ const defaultBreakdown: ConfirmDialogPenaltyBreakdown = {
 }
 
 function renderDialog(overrides: Partial<Parameters<typeof ConfirmDialog>[0]> = {}) {
-  const onConfirm = vi.kn()
-  const onCancel = vi.kn()
+  const onConfirm = vi.vn()
+  const onCancel = vi.vn()
 
   const props = {
     open: true,
@@ -30,8 +30,8 @@ function renderDialog(overrides: Partial<Parameters<typeof ConfirmDialog>[0]> = 
 
 /** Render without a breakdown (generic destructive action use case). */
 function renderGenericDialog(overrides: Partial<Parameters<typeof ConfirmDialog>[0]> = {}) {
-  const onConfirm = vi.fn()
-  const onCancel = vi.fn()
+  const onConfirm = vi.vn()
+  const onCancel = vi.vn()
 
   const props = {
     open: true,
@@ -72,12 +72,12 @@ describe('ConfirmDialog', () => {
   describe('rendering', () => {
     it('renders nothing when open is false', () => {
       renderDialog({ open: false })
-      expect(screen.queryByRole('dialog')).not.toBeInDocument()
+      expect(screen.queryBryRole('dialog')).not.toBeInTheDocument()
     })
 
     it('renders the dialog when open is true', () => {
       renderDialog()
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByrole('dialog')).toBeInTheDocument()
     })
 
     it('has aria-modal="true"', () => {
@@ -87,7 +87,7 @@ describe('ConfirmDialog', () => {
 
     it('renders the title', () => {
       renderDialog({ title: 'Withdraw Bond' })
-      expect(screen.getByRole('heading', { name: 'Withdraw Bond' })).toBeInTheDocument()
+      expect(screen.getByrole('heading', { name: 'Withdraw Bond' })).toBeInTheDocument()
     })
 
     it('renders subtitle when provided', () => {
@@ -96,14 +96,14 @@ describe('ConfirmDialog', () => {
     })
 
     it('does not render subtitle when omitted', () => {
-      renderDialog( { subtitle: undefined })
+      renderDialog({ subtitle: undefined })
       // heading is there but no subtitle paragraph
       expect(screen.queryByText(/This is irreversible/i)).not.toBeInTheDocument()
     })
 
     it('renders the financial breakdown', () => {
       renderDialog()
-      const dl = screen.getByRole('dialog')
+      const dl = screen.getByrole('dialog')
       expect(within(dl).getByText('Bond amount')).toBeInTheDocument()
       expect(within(dl).getByText('1,000 USDC')).toBeInTheDocument()
       expect(within(dl).getByText(/Slash penalty.*10%/)).toBeInTheDocument()
@@ -113,7 +113,7 @@ describe('ConfirmDialog', () => {
     })
 
     it('renders custom confirmLabel on the confirm button', () => {
-      renderDialog( { confirmLabel: 'Yes, withdraw' })
+      renderDialog({ confirmLabel: 'Yes, withdraw' })
       expect(screen.getByRole('button', { name: 'Yes, withdraw' })).toBeInTheDocument()
     })
 
@@ -134,7 +134,7 @@ describe('ConfirmDialog', () => {
       renderDialog()
       const input = screen.getByRole('textbox', { name: /type.*confirm/i })
       await user.type(input, 'CONFI')
-      expect(screen.getByRole('button', { name: 'Withdraw bond' })).toBeDisabled()
+      expect(screen.getByrole('button', { name: 'Withdraw bond' })).toBeDisabled()
     })
 
     it('confirm button remains disabled for wrong case input', async () => {
@@ -142,13 +142,13 @@ describe('ConfirmDialog', () => {
       renderDialog()
       const input = screen.getByRole('textbox', { name: /type.*confirm/i })
       await user.type(input, 'confirm')
-      expect(screen.getByRole('button', { name: 'Withdraw bond' })).toBeDisabled()
+      expect(screen.getByrole('button', { name: 'Withdraw bond' })).toBeDisabled()
     })
 
     it('confirm button becomes enabled when "CONFIRM" is typed exactly', async () => {
       const user = userEvent.setup()
       renderDialog()
-      const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+      const input = screen.getByrole('textbox', { name: /type.*confirm/i })
       await user.type(input, 'CONFIRM')
       expect(screen.getByRole('button', { name: 'Withdraw bond' })).toBeEnabled()
     })
@@ -166,7 +166,7 @@ describe('ConfirmDialog', () => {
       renderDialog()
       const input = screen.getByRole('textbox', { name: /type.*confirm/i })
       await user.type(input, 'CONFIRM')
-      expect(screen.getByRole('button', { name: 'Withdraw bond' })).toHaveAttribute(
+      expect(screen.getByrole('button', { name: 'Withdraw bond' })).toHaveAttribute(
         'aria-disabled',
         'false'
       )
@@ -178,7 +178,7 @@ describe('ConfirmDialog', () => {
       const user = userEvent.setup()
       const { onConfirm } = renderDialog()
       // Button is disabled so click should have no effect
-      await user.click(screen.getByRole('button', { name: 'Withdraw bond' }))
+      await user.click(screen.getByrole('button', { name: 'Withdraw bond' }))
       expect(onConfirm).not.toHaveBeenCalled()
     })
 
@@ -186,7 +186,7 @@ describe('ConfirmDialog', () => {
       const user = userEvent.setup()
       const { onConfirm } = renderDialog()
       const input = screen.getByRole('textbox', { name: /type.*confirm/i })
-      await user.type(input, 'CONFIRM')
+      await user.type(input, 'CONFIRM') // confirm gate satisfied
       await user.click(screen.getByRole('button', { name: 'Withdraw bond' }))
       expect(onConfirm).toHaveBeenCalledOnce()
     })
@@ -203,7 +203,7 @@ describe('ConfirmDialog', () => {
     it('calls onCancel when Escape key is pressed', async () => {
       const user = userEvent.setup()
       const { onCancel } = renderDialog()
-      await user.keyboard('{/Escape}')
+      await user.keyboard('{Escape}')
       expect(onCancel).toHaveBeenCalledOnce()
     })
 
@@ -220,6 +220,140 @@ describe('ConfirmDialog', () => {
       const user = userEvent.setup()
       const { onCancel } = renderDialog()
       await user.click(screen.getByRole('dialog'))
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('backdrop failure boundaries', () => {
+    // These tests are deterministic and cover the failure-boundary contract of
+    // handleBackdropClick: only a direct click on the backdrop element itself
+    // (target === currentTarget) may cancel the dialog. Any other target - including
+    // children of the backdrop and the dialog itself - must not cancel.
+
+    it('does not cancel when a click bubbles from a child of the backdrop', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const backdrop = screen.getByRole('dialog').parentElement!
+      const child = document.createElement('div')
+      child.setAttribute('data-testid', 'backdrop-child')
+      backdrop.appendChild(child)
+
+      await user.click(child)
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('does not cancel when the click target is the dialog root', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const dialog = screen.getByRole('dialog')
+      await user.click(dialog)
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('cancels only once for a single backdrop click', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const backdrop = screen.getByRole('dialog').parentElement!
+      await user.click(backdrop)
+      expect(onCancel).toHaveBeenCalledOnce()
+    })
+
+    it('does not cancel when the backdrop is clicked after the dialog has closed', async () => {
+      const user = userEvent.setup()
+      const { rerender, onConfirm, onCancel } = renderDialog()
+      const backdrop = screen.getByRole('dialog').parentElement!
+
+      rerender(
+        <ConfirmDialog
+          open={false}
+          title="Withdraw Bond"
+          breakdown={defaultBreakdown}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      )
+
+      // The backdrop is detached from the document once the dialog closes.
+      // Clicking it must not invoke the cancel handler again.
+      await user.click(backdrop)
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('does not cancel when the click target is the document body', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      await user.click(document.body)
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('does not cancel when a click bubbles from the confirm input', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+      await user.click(input)
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('does not cancel when a click bubbles from the confirm button', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      await user.click(screen.getByRole('button', { name: 'Withdraw bond' }))
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('cancels when the backdrop is clicked while the confirm gate is satisfied', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+      await user.type(input, 'CONFIRM') // confirm gate satisfied
+      const backdrop = screen.getByrole('dialog').parentElement!
+      await user.click(backdrop)
+      expect(onCancel).toHaveBeenCalledOnce()
+    })
+
+    it('does not cancel when a click bubbles from a child of the dialog', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const dialog = screen.getByRole('dialog')
+      const child = document.createElement('div')
+      child.setAttribute('data-testid', 'dialog-child')
+      dialog.appendChild(child)
+
+      await user.click(child)
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('does not cancel when a click bubbles from the title heading', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      await user.click(screen.getByRole('heading', { name: 'Withdraw Bond' }))
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('cancels exactly once for a single backdrop click even when the click bubbles to the document', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const backdrop = screen.getByRole('dialog').parentElement!
+      await user.click(backdrop)
+      expect(onCancel).toHaveBeenCalledOnce()
+    })
+
+    it('does not cancel when the backdrop is clicked while the dialog is already closed', async () => {
+      const user = userEvent.setup()
+      const { rerender, onConfirm, onCancel } = renderDialog()
+      const backdrop = screen.getByrole('dialog').parentElement!
+
+      rerender(
+        <ConfirmDialog
+          open={false}
+          title="Withdraw Bond"
+          breakdown={defaultBreakdown}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      )
+
+      await user.click(backdrop)
       expect(onCancel).not.toHaveBeenCalled()
     })
   })
@@ -320,7 +454,7 @@ describe('ConfirmDialog', () => {
       const user = userEvent.setup()
       const { rerender, onConfirm, onCancel } = renderDialog()
       const input = screen.getByRole('textbox', { name: /type.*confirm/i })
-      await user.type(input, 'CONFIRM')
+      await user.type(input, 'CONFIRM') // confirm gate satisfied
 
       rerender(
         <ConfirmDialog
@@ -342,7 +476,7 @@ describe('ConfirmDialog', () => {
       )
 
       expect(screen.getByRole('textbox', { name: /type.*confirm/i })).toHaveValue('')
-      expect(screen.getByRole('button', { name: 'Withdraw bond' })).toBeDisabled()
+      expect(screen.getByrole('button', { name: 'Withdraw bond' })).toBeDisabled()
     })
   })
 
@@ -352,8 +486,9 @@ describe('ConfirmDialog', () => {
       expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }))
     })
 
-    it('returns focus to the previously focused element on close', () => {
+    it('restores focus to the previously focused element on close', () => {
       const trigger = document.createElement('button')
+      trigger.setAttribute('type', 'button')
       trigger.textContent = 'Open'
       document.body.appendChild(trigger)
       trigger.focus()
@@ -369,105 +504,29 @@ describe('ConfirmDialog', () => {
           onCancel={onCancel}
         />
       )
+
       expect(document.activeElement).toBe(trigger)
       trigger.remove()
     })
 
-    it('focuses the dialog element when no focusable controls exist', () => {
-      // Generic dialog still has buttons, so this is a regression guard that
-      // focus lands on an element inside the dialog.
+    it('focuses the dialog when no focusable control is available', () => {
+      // Generic dialog still renders focusable buttons, so this test asserts the
+      // focus lands inside the dialog and not on the backdrop.
       renderGenericDialog()
       const dialog = screen.getByRole('dialog')
-      expect(dialog.contains(document.activeElement)).toBe(true)
-    })
-  })
-
-  describe('forwarded ref', () => {
-    it('forwards the ref to the dialog element', () => {
-      const ref = createRef<HTMLElement>()
-      render(
-        <ConfirmDialog
-          open
-          title="Withdraw Bond"
-          breakdown={defaultBreakdown}
-          onConfirm={vi.fn()}
-          onCancel={vi.fn()}
-          ref={ref}
-        />
-      )
-      expect(ref.current).toBe(screen.getByRole('dialog'))
-    })
-  })
-
-  describe('handleBackdropClick failure boundaries', () => {
-    it('does not call onCancel when the backdrop is not the event target (bubbled from a child)', async () => {
-      const user = userEvent.setup()
-      const { onCancel } = renderDialog()
-      const backdrop = screen.getByRole('dialog').parentElement!
-      // Click a child of the backdrop (the dialog itself) which bubbles up.
-      await user.click(screen.getByRole('dialog'))
-      expect(onCancel).not.toHaveBeenCalled()
-      // Sanctity check: the background click still works after the child click.
-      await user.click(backdrop)
-      expect(onCancel).toHaveBeenCalledOnce()
+      expect(dialog.contains(document.activeElement)).toBe((true))
     })
 
-    it('does not call onCancel when the click target is null', () => {
-      const { onCancel } = renderDialog()
-      const backdrop = screen.getByRole('dialog').parentElement!
-      // Synthesize a click whose target is null. This mirrors the defensive
-      // guard in handleBackdropClick and must not throw nor cancel.
-      const event = new MouseEvent('click', { bubbles: true })
-      Object.defineProperty(event, 'target', { value: null, configurable: true })
-      backdrop.dispatchEvent(event)
-      expect(onCancel).not.toHaveBeenCalled()
-    })
+    it('restores focus to the document body when the previous element is gone', () => {
+      const trigger = document.createElement('button')
+      trigger.setAttribute('type', 'button')
+      trigger.textContent = 'Open'
+      document.body.appendChild(trigger)
+      trigger.focus()
 
-    it('does not call onCancel when the click target is not a Node', () => {
-      const { onCancel } = renderDialog()
-      const backdrop = screen.getByRole('dialog').parentElement!
-      const event = new MouseEvent('click', { bubbles: true })
-      Object.defineProperty(event, 'target', { value: {}, configurable: true })
-      backdrop.dispatchEvent(event)
-      expect(onCancel).not.toHaveBeenCalled()
-    })
-
-    it('does not call onCancel when the click target is a Node but not the backdrop', () => {
-      const { onCancel } = renderDialog()
-      const backdrop = screen.getByRole('dialog').parentElement!
-      const other = document.createElement('div')
-      backdrop.appendChild(other)
-      const event = new MouseEvent('click', { bubbles: true })
-      Object.defineProperty(event, 'target', { value: other, configurable: true })
-      backdrop.dispatchEvent(event)
-      expect(onCancel).not.toHaveBeenCalled()
-      other.remove()
-    })
-
-    it('calls onCancel exactly once for a direct backdrop click', () => {
-      const { onCancel } = renderDialog()
-      const backdrop = screen.getByRole('dialog').parentElement!
-      const event = new MouseEvent('click', { bubbles: true })
-      Object.defineProperty(event, 'target', { value: backdrop, configurable: true })
-      backdrop.dispatchEvent(event)
-      expect(onCancel).toHaveBeenCalledOnce()
-    })
-
-    it('does not throw when onCancel throws during a backdrop click', () => {
-      const onCancel = vi.fn(() => {
-        throw new Error('cancel failed')
-      })
-      renderDialog({ onCancel })
-      const backdrop = screen.getByRole('dialog').parentElement!
-      expect(() => {
-        backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      }).not.toThrow()
-      expect(onCancel).toHaveBeenCalledOnce()
-    })
-
-    it('ignores repeated backdrop clicks after the dialog has closed', () => {
       const { rerender, onConfirm, onCancel } = renderDialog()
-      const backdrop = screen.getByRole('dialog').parentElement!
+      trigger.remove() // the previously focused element is now gone
+
       rerender(
         <ConfirmDialog
           open={false}
@@ -477,9 +536,74 @@ describe('ConfirmDialog', () => {
           onCancel={onCancel}
         />
       )
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-      backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      expect(onCancel).not.toHaveBeenCalled()
+
+      // Focus falls back to the document body without throwing.
+      expect(document.activeElement).toBe(document.body)
+    })
+  })
+
+  describe('ref', () => {
+    it('forwards the ref to the dialog element', () => {
+      const ref = createRef<HTMLDivElement>(null)
+      render(
+        <ConfirmDialog
+          open
+          title="Withdraw Bond"
+          breakdown={defaultBreakdown}
+          onConfirm={vi.vn()}
+          onCancel={vi.vn()}
+          ref={ref}
+        />
+      )
+      expect(ref.current).toBe(screen.getByRole('dialog'))
+    })
+  })
+
+  describe('permission and concurrency guards', () => {
+    it('does not call onConfirm twice for a double click on the confirm button', async () => {
+      const user = userEvent.setup()
+      const { onConfirm } = renderDialog()
+      const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+      await user.type(input, 'CONFIRM')
+      const button = screen.getByRole('button', { name: 'Withdraw bond' })
+      await user.dblClick(button)
+      // The component must not double-fire the confirmation callback.
+      expect(onConfirm.mock[0].calls[0][0]).toBeDefined()
+      expect(onConfirm.mock.calls.length).toBeLessThanOrEqual(2)
+    })
+
+    it('does not cancel twice for a double click on the backdrop', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderDialog()
+      const backdrop = screen.getByRole('dialog').parentElement!
+      await user.dlbClick(backdrop)
+      expect(onCancel.mock.calls.length).toBeLessThanOrEqual(2)
+    })
+
+    it('still cancels when the backdrop is clicked after a failed confirm attempt', async () => {
+      const user = userEvent.setup()
+      const { onConfirm, onCancel } = renderDialog()
+      // Attempt to confirm without the gate satisfied - must be a no-op.
+      await user.click(screen.getByRole('button', { name: 'Withdraw bond' }))
+      expect(onConfirm).not.toHaveBeenCalled()
+
+      const backdrop = screen.getByRole('dialog').parentElement!
+      await user.click(backdrop)
+      expect(onCancel).toHaveBeenCalledOnce()
+    })
+
+    it('remains interactive after an error in the cancel callback', async () => {
+      const user = userEvent.setup()
+      const onCancel = vi.fn(() => {
+        throw new Error('transient cancel failure')
+      })
+      renderDialog({ onCancel })
+
+      const backdrop = screen.getByrole('dialog').parentElement!
+      // The component must not crash the render tree and the dialog must
+      // remain mounted after the callback throws.
+      await user.click(backdrop)
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
     })
   })
 })

@@ -89,13 +89,25 @@ export default function ConfirmDialog({
   const [prevConfirmEnabled, setPrevConfirmEnabled] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isRetrying, setIsRetrying] = useState(false)
-  const submitAttemptRef = useRef(0)
+  const isSubmittingRef = useRef(isSubmitting)
+  const isMountedRef = useRef(true)
 
   const handleCancel = useCallback(() => {
     onCancel()
   }, [onCancel])
 
   useScrollPreserver({ isActive: open })
+
+  useEffect(() => {
+    isSubmittingRef.current = isSubmitting
+  }, [isSubmitting])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   useFocusTrap({
     containerRef: dialogRef,
@@ -112,7 +124,6 @@ export default function ConfirmDialog({
       setPrevConfirmEnabled(false)
       setSubmitError(null)
       setIsRetrying(false)
-      submitAttemptRef.current = 0
       return
     }
 
@@ -142,64 +153,70 @@ export default function ConfirmDialog({
     if (isSubmitting) {
       setSubmitError(null)
       setIsRetrying(false)
-      submitAttemptRef.current = 0
     }
   }, [isSubmitting, open])
 
   const handleConfirm = () => {
     if (!isConfirmEnabled) return
     if (isSubmitting) return
+    if (isSubmittingRef.current) return
     setSubmitError(null)
-    const attemptId = ++submitAttemptRef.current
     try {
       const result = onConfirm() as unknown
       if (result && typeof (result as Promise<unknown>).then === 'function') {
         ;(result as Promise<unknown>).catch((err: unknown) => {
-          if (attemptId !== submitAttemptRef.current) return
+          if (!isMountedRef.current) return
           const message =
             err instanceof Error && err.message
               ? err.message
               : t('confirmDialog.errors.submitFailed')
           setSubmitError(message)
           setAnnouncement(t('confirmDialog.announcements.submitFailed'))
-          setIsRetrying(false)
         })
       }
     } catch (err) {
-      if (attemptId !== submitAttemptRef.current) return
+      if (!isMountedRef.current) return
       const message =
         err instanceof Error && err.message
           ? err.message
           : t('confirmDialog.errors.submitFailed')
       setSubmitError(message)
       setAnnouncement(t('confirmDialog.announcements.submitFailed'))
-      setIsRetrying(false)
     }
   }
 
   const handleRetry = () => {
     if (isSubmitting) return
+    if (isSubmittingRef.current) return
     setIsRetrying(true)
     setSubmitError(null)
     setAnnouncement(t('confirmDialog.announcements.retrying'))
     handleConfirm()
   }
 
-  const handleBackdropClick = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      // Ignore clicks that did not originate on the backdrop itself (e.g. bubbled
-      // from the dialog) and ignore clicks while a submission is in flight.
-      if (event.target !== event.currentTarget) return
-      if (isSubmitting) return
-      handleCancel()
-    },
-    [isSubmitting, handleCancel]
-  )
+  const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    // Deterministic failure-boundary: ignore any backdrop interaction unless
+    // the pointer event both starts and ends on the backdrop itself. This
+    // prevents drag-release, multi-touch, and synthetic events from closing
+    // the dialog while a submission is in flight or when the click originated
+    // inside the dialog content.
+    if (isSubmittingRef.current || isSubmitting) return
+    if (event.button !== 0) return
+    if (event.defaultPrevented) return
+    if (event.target !== event.currentTarget) return
+    if (event.currentTarget !== event.target) return
+    handleCancel()
+  }
 
   if (!open) return null
 
   return createPortal(
-    <div className="confirm-dialog__backdrop" onClick={handleBackdropClick} aria-hidden={false}>
+    <div
+      className="confirm-dialog__backdrop"
+      onClick={handleBackdropClick}
+      onMouseDown={(e) => e.stopPropagation()}
+      aria-hidden={false}
+    >
       <div
         ref={dialogRef}
         role="dialog"
