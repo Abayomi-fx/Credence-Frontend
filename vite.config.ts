@@ -85,6 +85,7 @@ export default defineConfig({
         'src/components/Badge.tsx',
         'src/components/BackToTop.tsx',
         'src/components/controls/Select.tsx',
+        'src/components/controls/Toggle.tsx',
         'src/hooks/useLocalStorage.ts',
         'src/hooks/useReducedMotion.ts',
         'src/lib/bondPenalty.ts',
@@ -115,6 +116,15 @@ export default defineConfig({
         // Select owns the keyboard/pointer option-picking and its blur/close
         // recovery paths, so it is held at full coverage.
         'src/components/controls/Select.tsx': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        // Toggle owns its error/loading announcement surface and the id
+        // derivation that keeps its error node from colliding with FormField's,
+        // so it is held at full coverage.
+        'src/components/controls/Toggle.tsx': {
           lines: 100,
           branches: 100,
           functions: 100,
