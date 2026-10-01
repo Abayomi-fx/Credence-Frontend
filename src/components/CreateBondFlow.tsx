@@ -14,7 +14,7 @@
  * @see {@link docs/risk-disclaimer.md} for the full risk/slashing policy.
  */
 
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
+import React, { useMemo, useState, useRef, useEffect, useCallback, Component } from 'react'
 import AmountInput from './AmountInput'
 import { FormField } from './forms/FormField'
 import Button from './Button'
@@ -23,7 +23,7 @@ import Disclaimer from './Disclaimer'
 import { useToast } from './ToastProvider'
 import { useWallet } from '../context/WalletContext'
 import { useUsdcBalance } from '../hooks/useUsdcBalance'
-import { computeBondSlashBreakdown, calcUnlockDate } from '../lib/bondPenalty'
+// Removed duplicate import
 import {
   BOND_FLOW_MIN_STEP,
   BOND_FLOW_MAX_STEP,
@@ -39,9 +39,39 @@ import {
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import { formatUsdc } from '../lib/format'
 import { LoadingSkeleton } from './states'
-import { computeBondSlashBreakdown, calcUnlockDate } from '../lib/bondPenalty'
+// Removed duplicate import
 
 import './CreateBondFlow.css'
+
+// Deterministic failure boundary for CreateBondFlow
+class CreateBondFlowErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(_error) {
+    return { hasError: true };
+  }
+  componentDidCatch(error, info) {
+    console.error('[CreateBondFlow] Unexpected error:', error, info);
+    // Record audit for unexpected failure (if onAudit is available via props, will be handled by parent reset)
+  }
+  handleRetry = () => {
+    this.setState({ hasError: false });
+    if (this.props.onReset) this.props.onReset();
+  };
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="createBondFlow__errorBoundary">
+          <Banner severity="error" title="Unexpected error">An unexpected error occurred. Please retry.</Banner>
+          <Button type="button" onClick={this.handleRetry}>Retry</Button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,7 +154,13 @@ const saveAuditLog = (records: BondAuditRecord[]): void => {
 // Divider used between review card sections
 // ---------------------------------------------------------------------------
 
-const ReviewDivider = () => <div className="createBondFlow__reviewDivider" />
+const ReviewDivider = () => (
+  <div
+    aria-hidden="true"
+    className="createBondFlow__reviewDivider"
+    role="separator"
+  />
+)
 
 /**
  * Emits a diagnostic when a wizard transition is refused because the wizard is
@@ -152,15 +188,7 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
   const { isConnected, connect } = useWallet()
   const { balance, status: balanceStatus, refetch: refetchBalance } = useUsdcBalance()
   const [step, setStep] = useState<number>(BOND_FLOW_MIN_STEP)
-  const { isConnected } = useWallet()
-  const {
-    balance,
-    status: balanceStatus,
-    refetch: refetchBalance,
-  } = useUsdcBalance()
-  const prefersReducedMotion = useReducedMotion()
-
-  const [step, setStep] = useState(1)
+// Duplicate hook/state calls removed
   const [amount, setAmount] = useState('')
   const [duration, setDuration] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -484,7 +512,8 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="createBondFlow">
+<div className="createBondFlow">
+  <CreateBondFlowErrorBoundary onReset={safeReset}>
       <StepIndicator />
 
       {resetError && (
@@ -757,7 +786,7 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
             disabled={!acknowledged || submitting}
             className="createBondFlow__navButton createBondFlow__confirmButton"
           >
-            {submitting ? 'Creating Bond…' : 'Confirm &amp; Create Bond'}
+            {submitting ? 'Creating Bond…' : 'Confirm & Create Bond'}
           </Button>
         )}
 
@@ -773,3 +802,5 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
     </div>
   )
 }
+
+
