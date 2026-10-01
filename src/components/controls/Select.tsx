@@ -43,8 +43,13 @@ export default function Select({
         disabled={isDisabled}
         onChange={(e) => onChange(e.target.value)}
       >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
+        {options.map((o, index) => (
+          // Index is part of the key because `value` is caller-supplied and not
+          // guaranteed unique: keying on `value` alone makes React warn and leaves
+          // reconciliation of duplicate options explicitly unsupported. Pairing the
+          // index keeps every rendered option a distinct, stable-identity node
+          // without changing the public interface or the option order.
+          <option key={`${index}:${o.value}`} value={o.value}>
             {o.label}
           </option>
         ))}
