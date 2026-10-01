@@ -34,7 +34,7 @@ export interface ConfirmDialogProps {
    * React children slot for custom content in the dialog body.
    */
   children?: React.ReactNode
-  onConfirm: () => void
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
   returnFocusRef?: RefObject<HTMLElement | null>
   confirmLabel?: string
@@ -270,6 +270,12 @@ export default function ConfirmDialog({
 
           {children}
 
+          {error && (
+            <div className="confirm-dialog__error" role="alert" aria-live="assertive">
+              {error}
+            </div>
+          )}
+
           <div className="confirm-dialog__confirm-field">
             <label htmlFor={`${titleId}-confirm-input`}>
               {confirmInputLabel || (
@@ -304,7 +310,7 @@ export default function ConfirmDialog({
             type="button"
             variant="secondary"
             onClick={handleCancel}
-            disabled={isSubmitting}
+            disabled={isCurrentlySubmitting}
           >
             Cancel
           </Button>
@@ -315,7 +321,7 @@ export default function ConfirmDialog({
             disabled={!isConfirmEnabled || isSubmitting}
             isLoading={isSubmitting || isRetrying}
             onClick={handleConfirm}
-            aria-disabled={!isConfirmEnabled || isSubmitting}
+            aria-disabled={!isConfirmEnabled || isCurrentlySubmitting}
           >
             {confirmLabel}
           </Button>
