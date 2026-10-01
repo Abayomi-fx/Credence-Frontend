@@ -1,8 +1,48 @@
-import React from 'react'
+import React, { Component, ReactNode } from 'react'
 import { FormError } from './FormError'
 import './FormField.css'
 
-export type FormFieldState = 'default' | 'error' | 'success'
+export type FormFieldState = 'default' | 'error' | 'success' | 'loading' | 'stale' | 'permission'
+
+interface FormFieldErrorBoundaryProps {
+  children: ReactNode
+  onRetry?: () => void
+  errorId?: string
+}
+
+interface FormFieldErrorBoundaryState {
+  hasError: boolean
+  error: Error | null
+}
+
+export class FormFieldErrorBoundary extends Component<FormFieldErrorBoundaryProps, FormFieldErrorBoundaryState> {
+  state: FormFieldErrorBoundaryState = { hasError: false, error: null }
+
+  static getDerivedStateFromError(error: Error): FormFieldErrorBoundaryState {
+    return { hasError: true, error }
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, error: null })
+    this.props.onRetry?.()
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="form-field-boundary" role="alert" id={this.props.errorId}>
+          <FormError id={this.props.errorId ? `${this.props.errorId}-boundary` : undefined}>
+            An unexpected error occurred rendering this field.
+          </FormError>
+          <button type="button" onClick={this.handleRetry} className="form-field-retry-btn" aria-label="Retry loading field">
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 /**
  * Resolves a caller-supplied message prop to the value that should be treated
@@ -79,6 +119,16 @@ interface FormFieldProps {
    * Suppressed when `error` is set (error takes precedence).
    */
   success?: string
+  
+  /** Indicates the field is waiting for an asynchronous operation. */
+  loading?: boolean
+  /** Indicates the field's value may be out of date. */
+  stale?: boolean
+  /** Provide a string to show a permission warning, or boolean true for generic permission block. */
+  permission?: string | boolean
+  /** Callback for when the user asks to retry an operation (or recovering from an error boundary). */
+  onRetry?: () => void
+
   /** When true, the label is visually hidden but remains linked to the control via htmlFor/id. */
   srOnlyLabel?: boolean
   /** Marks the field as required in the label and sets aria-required on the control. */
@@ -93,6 +143,10 @@ export function FormField({
   hint,
   error,
   success,
+  loading = false,
+  stale = false,
+  permission,
+  onRetry,
   srOnlyLabel = false,
   required = false,
   className,
@@ -123,7 +177,7 @@ export function FormField({
   const rootClassName = ['form-field', className].filter((c) => c?.trim()).join(' ')
 
   return (
-    <div className={rootClassName} data-state={state}>
+    <div className={rootClassName} data-state={state} aria-busy={loading ? 'true' : undefined}>
       <label htmlFor={id} className={srOnlyLabel ? 'sr-only' : undefined}>
         {label}
         {required && !srOnlyLabel && (
@@ -137,6 +191,12 @@ export function FormField({
       {presentHint && (
         <span id={hintId} className="form-hint">
           {presentHint}
+        </span>
+      )}
+      
+      {permissionMessage && (
+        <span id={permissionId} className="form-permission" role="status">
+          {permissionMessage}
         </span>
       )}
 
