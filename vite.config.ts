@@ -75,6 +75,7 @@ export default defineConfig({
         'src/components/AddressInput.tsx',
         'src/components/AmountInput.tsx',
         'src/components/Badge.tsx',
+        'src/components/BackToTop.tsx',
         'src/hooks/useLocalStorage.ts',
         'src/hooks/useReducedMotion.ts',
         'src/lib/bondPenalty.ts',
@@ -89,6 +90,9 @@ export default defineConfig({
         // full coverage to keep the state machine from silently losing a branch.
         'src/components/AmountInput.tsx': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/components/Badge.tsx': { branches: 95 },
+        // BackToTop guards every DOM/window call in its click handler, so each
+        // catch arm is a reachable branch that must stay covered.
+        'src/components/BackToTop.tsx': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/hooks/useLocalStorage.ts': { lines: 95, branches: 95 },
         'src/hooks/useReducedMotion.ts': { branches: 90 },
         'src/lib/bondPenalty.ts': { lines: 95, branches: 95, functions: 95 },
