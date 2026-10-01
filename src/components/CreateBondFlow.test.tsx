@@ -102,6 +102,16 @@ describe('formatUsdc', () => {
   })
 })
 
+describe('ReviewDivider', () => {
+  it('renders a stable non-interactive separator on the review step', async () => {
+    await reachStep3('1000')
+
+    const divider = screen.getByRole('separator', { hidden: true })
+    expect(divider).toHaveClass('createBondFlow__reviewDivider')
+    expect(divider).toHaveAttribute('aria-hidden', 'true')
+  })
+})
+
 describe('getPenaltyRateForDuration', () => {
   it('returns 0.2 for 30-day lock', () => {
     expect(getPenaltyRateForDuration(30)).toBe(0.2)

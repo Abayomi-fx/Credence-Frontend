@@ -31,6 +31,16 @@ export interface TrustGaugeProps {
   score: number
   /** Current tier */
   tier: TrustTier
+  /** Whether the gauge data is currently loading */
+  isLoading?: boolean
+  /** Any error encountered while fetching the gauge data */
+  error?: Error | string | null
+  /** Callback to retry loading data */
+  onRetry?: () => void
+  /** Whether the displayed data might be stale (e.g. background refresh) */
+  isStale?: boolean
+  /** Whether the user has permission to view the gauge. Defaults to true. */
+  isPermitted?: boolean
   /** Optional audit correlation identifier included in commit events. */
   correlationId?: string
   /** Called after a committed score/tier transition with a versioned audit record. */
@@ -188,6 +198,11 @@ export function getProgressPercentage(score: number): number {
 export default function TrustGauge({
   score,
   tier,
+  isLoading = false,
+  error = null,
+  onRetry,
+  isStale = false,
+  isPermitted = true,
   className = '',
   id = 'trust-gauge',
   correlationId,
@@ -257,6 +272,12 @@ export default function TrustGauge({
       data-score={resolvedScore}
       data-tier={resolvedTier}
       data-correlation-id={correlationId ?? id}
+      data-state-loading={isLoading}
+      data-state-error={!!error}
+      data-state-stale={isStale}
+      data-state-permitted={isPermitted}
+      aria-busy={isLoading}
+      aria-invalid={!!error}
     >
       {/* Accessible heading and description */}
       <div className="trust-gauge__header">
@@ -266,9 +287,54 @@ export default function TrustGauge({
         </p>
       </div>
 
-      {/* Main gauge container */}
-      <div
-        className="trust-gauge__container"
+      {!isPermitted ? (
+        <div className="trust-gauge__permission-denied" role="alert">
+          <svg className="trust-gauge__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <p>You do not have permission to view this trust score.</p>
+        </div>
+      ) : (
+        <>
+          {error && (
+            <div className="trust-gauge__error-banner" role="alert">
+              <svg className="trust-gauge__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span className="trust-gauge__error-message">
+                {error instanceof Error ? error.message : error}
+              </span>
+              {onRetry && (
+                <button type="button" className="trust-gauge__retry-button" onClick={onRetry}>
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
+
+          {isStale && !error && (
+            <div className="trust-gauge__stale-banner" role="status">
+              <svg className="trust-gauge__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span>Displaying offline or cached data.</span>
+            </div>
+          )}
+
+          <div className={`trust-gauge__content-wrapper ${isLoading ? 'trust-gauge__content-wrapper--loading' : ''} ${isStale ? 'trust-gauge__content-wrapper--stale' : ''}`}>
+            {isLoading && (
+              <div className="trust-gauge__loading-overlay" role="status" aria-label="Loading">
+                <div className="trust-gauge__spinner" />
+              </div>
+            )}
+            
+            {/* Main gauge container */}
+            <div
+              className="trust-gauge__container"
         role="progressbar"
         tabIndex={0}
         aria-live="polite"
@@ -402,6 +468,9 @@ export default function TrustGauge({
           })}
         </ul>
       </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
