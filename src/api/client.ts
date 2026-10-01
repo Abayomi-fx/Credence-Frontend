@@ -458,11 +458,68 @@ async function parseResponse(response: Response): Promise<unknown> {
   return text || undefined
 }
 
+/** Maximum length of a server-provided error message we will surface verbatim. */
+const MAX_ERROR_MESSAGE_LENGTH = 500
+
+/**
+ * Extracts a deterministic, safe, user-visible error message from a failed
+ * response payload.
+ *
+ * Invariants:
+ * - Always returns a non-empty string, so callers can rely on
+ *   `new ApiError(status, message)` never producing an empty message.
+ * - Never throws: any shape of `payload` (null, primitives, arrays, objects
+ *   with getters that throw, cyclic structures) resolves to a fallback.
+ * - Never leaks unbounded or control-character-laden server content: string
+ *   messages are trimmed, stripped of control characters, and truncated to
+ *   {@link MAX_ERROR_MESSAGE_LENGTH}. This keeps logs and UI rendering
+ *   deterministic and prevents log-injection / terminal-escape attacks.
+ * - Prefers an explicit `message` string, then a `error` string, then a
+ *   non-empty string payload, then a status-derived fallback.
+ */
 function errorMessage(status: number, payload: unknown): string {
+const fallback = 'Request failed with status ' + status
+
+  const sanitize = (value: string): string => {
+    // Strip C0/C1 control characters (except tab/newline which we collapse
+    // to spaces) so the message is safe to render and log.
+    // eslint-disable-next-line no-control-regex
+    const stripped = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+    const collapsed = stripped.replace(/[\r\n\t]+/g, ' ').trim()
+    if (!collapsed) return ''
+    return collapsed.length > MAX_ERROR_MESSAGE_LENGTH
+      ? collapsed.slice(0, MAX_ERROR_MESSAGE_LENGTH) + '…'
+      : collapsed
+  }
+
   if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string') {
     return payload.message
   }
-  if (typeof payload === 'string' && payload.trim()) return payload
+  }
+const readStringField = (source: unknown, key: string): string | undefined => {
+    if (!source || typeof source !== 'object') return undefined
+    let raw: unknown
+    try {
+      raw = (source as Record<string, unknown>)[key]
+    } catch {
+      return undefined
+    }
+    if (typeof raw !== 'string') return undefined
+    const cleaned = sanitize(raw)
+    return cleaned || undefined
+  }
+
+  const fromMessage = readStringField(payload, 'message')
+  if (fromMessage) return fromMessage
+
+  const fromError = readStringField(payload, 'error')
+  if (fromError) return fromError
+
+  if (typeof payload === 'string') {
+    const cleaned = sanitize(payload)
+    if (cleaned) return cleaned
+  }
+
   return `Request failed with status ${status}`
 }
 
@@ -539,7 +596,9 @@ const correlationId = generateCorrelationId('api-fetch')
     }
   }
 
-  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+  const correlationId = generateCorrelationId('api-fetch')
+  const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
 
 export function setIdentityEpoch(epoch?: number): number {
