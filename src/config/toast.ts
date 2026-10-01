@@ -18,11 +18,13 @@ const DEFAULT_TIMEOUTS = {
  * - Never throws; invalid input falls back to the compiled-in default.
  */
 function parseEnvTimeout(raw: string | undefined): number | null {
-  if (typeof raw !== 'string') return null
+if (typeof raw !== 'string') return null
   const trimmed = raw.trim()
   if (!trimmed) return null
   const parsed = Number(trimmed)
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
+  if (!Number.isFinite(parsed)) return null
+  if (parsed < 0) return null
+  return Math.round(parsed)
 }
 
 /**
