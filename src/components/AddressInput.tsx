@@ -25,6 +25,7 @@ interface AddressInputProps {
   value: string
   onChange: (value: string) => void
   onValidationChange?: (isValid: boolean) => void
+  onBlur?: (value: string) => Promise<void> | void
   disabled?: boolean
   /**
    * Renders the field in a busy state and suppresses interaction while a
@@ -85,7 +86,7 @@ function AddressInputInner({
 
   return (
     <div
-      className={`address-input-container ${focused ? 'address-input-container--focused' : ''} ${showError ? 'address-input-container--error' : ''} ${showSuccess ? 'address-input-container--success' : ''}`}
+      className={`address-input-container ${focused ? 'address-input-container--focused' : ''} ${showError ? 'address-input-container--error' : ''} ${showSuccess ? 'address-input-container--success' : ''} ${blurState === 'loading' ? 'address-input-container--loading' : ''}`}
     >
       <input
         ref={inputRef}
@@ -141,6 +142,7 @@ export default function AddressInput({
   value,
   onChange,
   onValidationChange,
+  onBlur,
   disabled = false,
   isLoading = false,
   className = '',
@@ -161,10 +163,16 @@ export default function AddressInput({
   // a homograph/injection attempt (e.g. zero-width spaces).
   const [hasSuspiciousChars, setHasSuspiciousChars] = useState(false)
 
+  const [blurState, setBlurState] = useState<'idle' | 'loading' | 'error' | 'stale' | 'permission'>('idle')
+  const [blurError, setBlurError] = useState<string | null>(null)
+  
+  const blurPromiseRef = useRef<Promise<void> | null>(null)
+  const failedValueRef = useRef<string | null>(null)
+
   const isValid = isValidStellarAddress(value)
   const isEmpty = !value
   const showError = attempted && !isValid && !isEmpty
-  const showSuccess = attempted && isValid
+  const showSuccess = attempted && isValid && blurState !== 'error' && blurState !== 'permission' && blurState !== 'stale'
 
   // Notify parent of validation state change. We key on the boolean
   // result and the callback identity so consumers can pass an inline
@@ -207,9 +215,10 @@ export default function AddressInput({
     }
   }
 
-  const handleBlur = () => {
+  const handleBlurEvent = () => {
     setFocused(false)
     setAttempted(true)
+    executeBlur(value)
   }
 
   const handleFocus = () => {
@@ -287,15 +296,37 @@ export default function AddressInput({
           inputRef={inputRef}
           value={value}
           onChange={handleChange}
-          onBlur={handleBlur}
+          onBlur={handleBlurEvent}
           onFocus={handleFocus}
           disabled={isDisabled}
           handlePaste={handlePaste}
           focused={focused}
           showError={Boolean(error)}
           showSuccess={Boolean(successMessage)}
+          blurState={blurState}
         />
       </FormField>
+      
+      {blurState === 'permission' && (
+        <div className="address-input-blur-error" role="alert" style={{ marginTop: '0.5rem', color: 'var(--color-error)' }}>
+          <strong>Permission Denied:</strong> {blurError}
+          <button type="button" onClick={handleRetry} style={{ marginLeft: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+        </div>
+      )}
+      
+      {blurState === 'stale' && (
+        <div className="address-input-blur-error" role="alert" style={{ marginTop: '0.5rem', color: 'var(--color-warning)' }}>
+          <strong>Stale Data:</strong> {blurError}
+          <button type="button" onClick={handleRetry} style={{ marginLeft: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+        </div>
+      )}
+      
+      {blurState === 'error' && (
+        <div className="address-input-blur-error" role="alert" style={{ marginTop: '0.5rem', color: 'var(--color-error)' }}>
+          <strong>Error:</strong> {blurError}
+          <button type="button" onClick={handleRetry} style={{ marginLeft: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+        </div>
+      )}
 
       {/* Address echo display when valid and no external error is set */}
       {successMessage && value && (

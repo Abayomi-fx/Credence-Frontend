@@ -662,3 +662,22 @@ describe('ConfirmDialog', () => {
     })
   })
 })
+
+
+describe('ConfirmDialog - failure boundary coverage', () => {
+  it('handles promise rejection internally without closing', async () => {
+    const user = userEvent.setup()
+    let rejectPromise: any
+    const promise = new Promise<void>((_, reject) => { rejectPromise = reject })
+    const onConfirm = vi.fn().mockReturnValue(promise)
+    renderDialog({ onConfirm })
+    const input = screen.getByRole('textbox', { name: /type.*confirm/i })
+    await user.type(input, 'CONFIRM')
+    const confirmBtn = screen.getByRole('button', { name: 'Withdraw bond' })
+    await user.click(confirmBtn)
+    expect(confirmBtn).toBeDisabled()
+    rejectPromise(new Error('Network error'))
+    await screen.findByText('Network error')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+  })
+})

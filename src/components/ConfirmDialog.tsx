@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useScrollPreserver } from '../hooks/useScrollPreserver'
 import Button from './Button'
+import Banner from './Banner'
 import './ConfirmDialog.css'
 
 const DEFAULT_CONFIRM_PHRASE = 'CONFIRM'
@@ -57,6 +58,14 @@ export interface ConfirmDialogProps {
    * Reset to `false` once the async operation settles (success or error).
    */
   isSubmitting?: boolean
+  /** External error to display. If onConfirm returns a Promise that rejects, ConfirmDialog will display the rejection error automatically. */
+  error?: React.ReactNode
+  /** If true, indicates the data is stale and submission should be blocked. */
+  isStale?: boolean
+  /** If set, indicates a permission error and blocks submission. */
+  permissionError?: React.ReactNode
+  /** Called when the user clicks Retry after a failure. If omitted, the confirm button acts as retry. */
+  onRetry?: () => void
 }
 
 export default function ConfirmDialog({
@@ -76,6 +85,10 @@ export default function ConfirmDialog({
   confirmPhrase = DEFAULT_CONFIRM_PHRASE,
   confirmHint = DEFAULT_CONFIRM_HINT,
   isSubmitting = false,
+  error = null,
+  isStale = false,
+  permissionError = null,
+  onRetry,
 }: ConfirmDialogProps) {
   const { t } = useTranslation()
   const titleId = useId()
@@ -131,7 +144,7 @@ export default function ConfirmDialog({
     setAnnouncement(message)
   }, [open, title, subtitle])
 
-  const isConfirmEnabled = confirmText === confirmPhrase
+  const isConfirmEnabled = confirmText === confirmPhrase && !isSubmissionBlocked
 
   useEffect(() => {
     if (isConfirmEnabled !== prevConfirmEnabled) {
@@ -247,6 +260,24 @@ export default function ConfirmDialog({
         </header>
 
         <div id={descId} className="confirm-dialog__body">
+          {permissionError && (
+            <Banner severity="incident" title="Permission Denied">
+              {permissionError}
+            </Banner>
+          )}
+
+          {isStale && !permissionError && (
+            <Banner severity="warn" title="Stale Data">
+              The information below may be out of date. Please refresh and try again.
+            </Banner>
+          )}
+
+          {displayError && !permissionError && (
+            <Banner severity="incident" title="Submission Failed">
+              {displayError}
+            </Banner>
+          )}
+
           {breakdown ? (
             <dl className="confirm-dialog__breakdown">
               <div className="confirm-dialog__breakdown-row">
@@ -299,6 +330,7 @@ export default function ConfirmDialog({
               spellCheck={false}
               aria-required="true"
               placeholder={confirmPhrase}
+              disabled={isSubmissionBlocked}
             />
             <p className="confirm-dialog__confirm-hint">{confirmInputHint || confirmHint}</p>
           </div>
@@ -323,7 +355,7 @@ export default function ConfirmDialog({
             onClick={handleConfirm}
             aria-disabled={!isConfirmEnabled || isCurrentlySubmitting}
           >
-            {confirmLabel}
+            {displayError ? 'Retry' : confirmLabel}
           </Button>
         </footer>
       </div>
