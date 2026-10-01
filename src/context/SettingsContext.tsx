@@ -406,16 +406,25 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined') return
     const root = window.document.documentElement
 
-    if (typeof window.matchMedia !== 'function') {
-      root.setAttribute('data-theme', themeMode === 'system' ? 'light' : themeMode)
-      return
-    }
-
-    const systemPrefersDark = (): boolean => {
+    // `matchMedia` is absent in SSR and in some non-browser test environments, and
+    // a third-party shim can throw. Treat every one of those as "OS prefers
+    // light" so `system` mode degrades to a usable light theme instead of
+    // crashing the whole app shell. `ThemeToggle` applies the same fallback so
+    // the button and the document never disagree.
+    const readSystemPrefersDark = (): boolean => {
+      if (typeof window.matchMedia !== 'function') return false
       try {
-        return window.matchMedia(SYSTEM_DARK_QUERY).matches === true
+        return Boolean(window.matchMedia('(prefers-color-scheme: dark)')?.matches)
       } catch {
         return false
+      }
+    }
+
+    const apply = () => {
+      if (themeMode === 'system') {
+        root.setAttribute('data-theme', readSystemPrefersDark() ? 'dark' : 'light')
+      } else {
+        root.setAttribute('data-theme', themeMode)
       }
     }
 
@@ -430,40 +439,27 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
     if (themeMode !== 'system') return
 
+    if (typeof window.matchMedia !== 'function') return
+
     let mql: MediaQueryList
     try {
-      mql = window.matchMedia(SYSTEM_DARK_QUERY)
+      mql = window.matchMedia('(prefers-color-scheme: dark)')
     } catch {
-      // The value is already applied via the guarded read; live OS updates
-      // are simply unavailable until the environment recovers.
       return
     }
     if (!mql) return
 
     const handler = () => apply()
-    try {
-      if (typeof mql.addEventListener === 'function') {
-        mql.addEventListener('change', handler)
-      } else if (typeof mql.addListener === 'function') {
-        mql.addListener(handler)
-      } else {
-        return
-      }
-    } catch {
-      return
+    // Older Safari exposes only the deprecated listener API.
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', handler)
+      return () => mql.removeEventListener?.('change', handler)
     }
-
-    return () => {
-      try {
-        if (typeof mql.removeEventListener === 'function') {
-          mql.removeEventListener('change', handler)
-        } else if (typeof mql.removeListener === 'function') {
-          mql.removeListener(handler)
-        }
-      } catch {
-        /* best-effort cleanup: a failed detach must not throw from unmount */
-      }
+    if (typeof mql.addListener === 'function') {
+      mql.addListener(handler)
+      return () => mql.removeListener?.(handler)
     }
+    return
   }, [themeMode])
 
   const retryPersist = async () => {

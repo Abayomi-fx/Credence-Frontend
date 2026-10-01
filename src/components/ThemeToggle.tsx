@@ -93,48 +93,62 @@ export function MoonIcon() {
 }
 
 /**
- * Deterministic failure-boundary wrapper for the theme toggle.
+ * SSR-safe read of the OS-level `prefers-color-scheme: dark` preference.
  *
- * Invariants:
- * - The toggle must never crash the surrounding tree. If any unknown failure
- *   occurs during render (or a child renderer), we degrade to a static
- *   fallback button that preserves the accessible name and remains clickable
- *   so the user can recover without losing their session.
- * - The fallback is pure and side-effect free: it never touches localStorage,
- *   the DOM, or the event bus, so it cannot introduce inconsistent state.
+ * Returns `false` (light) whenever the preference cannot be determined — no
+ * `window`, no `matchMedia` (older JSDOM, SSR), or a `matchMedia` that throws.
+ * A failed probe degrades to light mode rather than crashing the shell, which
+ * is the same fallback `SettingsContext` uses when it resolves `system`.
  */
-class ThemeToggleErrorBoundary extends React.Component<{ children?: React.ReactNode }, { failed: boolean }> {
-  state = { failed: false }
-
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true }
+function getSystemPrefersDark(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
   }
-
-  componentDidCatch(error: unknown) {
-    // Observability: log the failure without exposing sensitive data.
-    // The toggle never receives user PII, so the message is safe to surface.
-    // eslint-disable-next-line no-console
-    console.error('ThemeToggle failed to render; falling back to a safe toggle.', error)
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <button
-          type="button"
-          className="theme-toggle"
-          aria-label="Toggle theme"
-          aria-pressed="false"
-          title="Switch to dark theme"
-        >
-          <MoonIcon />
-        </button>
-      )
-    }
-    return this.props.children ?? null
+  try {
+    return Boolean(window.matchMedia('(prefers-color-scheme: dark)')?.matches)
+  } catch {
+    return false
   }
 }
 
+/**
+ * ThemeToggle — a single-icon button for flipping the app between light and
+ * dark mode.
+ *
+ * ## Single source of truth
+ *
+ * The displayed state is derived *entirely* from {@link useSettings}; this
+ * component owns **no** theme state and writes to **no** storage key of its
+ * own. {@link SettingsContext} is the sole owner of the theme (persisted under
+ * the `credence:settings` key) and the sole writer of the document's
+ * `data-theme` attribute. See `docs/dark-mode.md` for the model.
+ *
+ * The light/dark value shown is *resolved* from `themeMode`:
+ * - `'light'` / `'dark'` resolve to themselves;
+ * - `'system'` resolves via `matchMedia('(prefers-color-scheme: dark)')`.
+ *
+ * A `matchMedia` subscription keeps the resolved value (and therefore the icon,
+ * `aria-pressed`, and `aria-label`) in sync when the OS theme changes while
+ * `themeMode` is `'system'`, so the toggle always matches the document's
+ * `data-theme`.
+ *
+ * Clicking flips `themeMode` to the *explicit* opposite of the currently
+ * resolved theme (e.g. resolved-dark → `'light'`), never back to `'system'`.
+ *
+ * ## Invariants
+ *
+ * 1. **No self-owned state.** The only local state is the mirrored OS
+ *    preference, which is derived from — never authoritative over — `themeMode`.
+ * 2. **No self-owned persistence.** This component never calls
+ *    `localStorage.setItem`; the legacy orphan `'theme'` key stays absent.
+ * 3. **Always actionable.** The rendered state must be exactly one of
+ *    `'light' | 'dark'`. Any unrecognized `themeMode` (corrupt storage, an
+ *    unexpected future value) resolves to `'light'` instead of producing an
+ *    icon/label/`aria-pressed` triple that disagrees with `data-theme`.
+ * 4. **Deterministic under repetition.** N clicks always yield the same
+ *    resolved theme, so retries, double-clicks, and concurrent clicks cannot
+ *    desynchronize the toggle from the document.
+ */
 export default function ThemeToggle() {
   return (
     <ThemeToggleErrorBoundary>
@@ -338,190 +352,8 @@ export function subscribeSystemPrefersDark(
     return inactiveSubscription('match-media-unavailable')
   }
 
-  let mql: MediaQueryList
-  try {
-    mql = window.matchMedia(SYSTEM_DARK_QUERY) as MediaQueryList
-  } catch {
-    return inactiveSubscription('match-media-threw')
-  }
-  if (!mql || typeof mql !== 'object') return inactiveSubscription('invalid-media-query-list')
-
-  const handler = (event: MediaQueryListEvent) => {
-    const matches: unknown = event?.matches
-    if (typeof matches !== 'boolean') {
-      reportFailure('matches-not-boolean')
-      return
-    }
-    try {
-      listener(matches)
-    } catch {
-      reportFailure('listener-threw')
-    }
-  }
-
-  // Tracks which API registered the handler so removal uses the matching one
-  // (mixing the modern and legacy pairs is undefined behaviour in some UAs).
-  let registration: 'modern' | 'legacy' | null = null
-
-  let detached = false
-  const unsubscribe = () => {
-    if (detached) return
-    detached = true
-    try {
-      if (registration === 'modern' && typeof mql.removeEventListener === 'function') {
-        mql.removeEventListener('change', handler)
-      } else if (registration === 'legacy' && typeof mql.removeListener === 'function') {
-        mql.removeListener(handler)
-      }
-    } catch {
-      reportFailure('unsubscribe-threw')
-    }
-  }
-
-  try {
-    if (typeof mql.addEventListener === 'function') {
-      mql.addEventListener('change', handler)
-      registration = 'modern'
-    } else if (typeof mql.addListener === 'function') {
-      mql.addListener(handler)
-      registration = 'legacy'
-    } else {
-      return inactiveSubscription('subscribe-unavailable')
-    }
-  } catch {
-    return inactiveSubscription('subscribe-threw')
-  }
-
-  return { active: true, unsubscribe }
-}
-
-function sameReading(a: SystemPrefersDarkReading, b: SystemPrefersDarkReading): boolean {
-  return a.prefersDark === b.prefersDark && a.source === b.source && a.failure === b.failure
-}
-
-/**
- * Live system preference with a bounded-retry subscription.
- *
- * State transitions: `media` (healthy) → on failure → `fallback` (last good
- * value retained, retrying up to {@link SUBSCRIBE_MAX_ATTEMPTS} times with a
- * linear backoff) → `media` again when the environment recovers. The value is
- * never cleared on failure, so a retry storm can never blank the toggle or
- * lose the user's visible state.
- */
-function useSystemPrefersDark(): { reading: SystemPrefersDarkReading; resync: () => void } {
-  const [reading, setReading] = useState<SystemPrefersDarkReading>(() => readSystemPrefersDark())
-  const attachRef = useRef<() => void>(() => {})
-
-  useEffect(() => {
-    let disposed = false
-    let subscription: SystemPrefersDarkSubscription | null = null
-    let retryTimer: ReturnType<typeof setTimeout> | undefined
-    let attempts = 0
-
-    const apply = (next: SystemPrefersDarkReading) => {
-      if (disposed) return
-      setReading((prev) => (sameReading(prev, next) ? prev : next))
-    }
-
-    /** Re-read now; a recovered environment is picked up immediately. */
-    const sync = () => apply(readSystemPrefersDark())
-
-    /**
-     * Idempotent while a subscription is live (it just re-syncs), and the one
-     * entry point for (re)attaching — so retries and manual resyncs share the
-     * same attempt budget and can never spawn overlapping subscriptions.
-     */
-    const attach = () => {
-      if (disposed) return
-      if (subscription?.active) {
-        sync()
-        return
-      }
-      sync()
-      attempts += 1
-      const next = subscribeSystemPrefersDark((prefersDark) =>
-        apply({ prefersDark, source: 'media' })
-      )
-      if (next.active) {
-        subscription = next
-        return
-      }
-      if (attempts >= SUBSCRIBE_MAX_ATTEMPTS) return
-      retryTimer = setTimeout(() => {
-        retryTimer = undefined
-        attach()
-      }, SUBSCRIBE_RETRY_DELAY_MS * attempts)
-    }
-
-    attachRef.current = attach
-    attach()
-
-    return () => {
-      disposed = true
-      attachRef.current = () => {}
-      if (retryTimer !== undefined) {
-        clearTimeout(retryTimer)
-        retryTimer = undefined
-      }
-      subscription?.unsubscribe()
-      subscription = null
-    }
-  }, [])
-
-  const resync = useCallback(() => attachRef.current(), [])
-
-  return { reading, resync }
-}
-
-/**
- * ThemeToggle — a single-icon button for flipping the app between light and
- * dark mode.
- *
- * ## Single source of truth
- *
- * The displayed state is derived *entirely* from {@link useSettings}; this
- * component owns **no** theme state and writes to **no** storage key of its
- * own. `SettingsContext` is the sole owner of the theme (persisted under the
- * `credence:settings` key) and the sole writer of the document's
- * `data-theme` attribute. See `docs/dark-mode.md` for the model.
- *
- * The light/dark value shown is *resolved* from `themeMode`:
- * - `'light'` / `'dark'` resolve to themselves;
- * - `'system'` resolves via {@link getSystemPrefersDark}.
- *
- * ## Failure boundaries
- *
- * The `'system'` read is the only environmental dependency, and it is
- * non-fatal by construction (see {@link getSystemPrefersDark}): a failed read
- * or subscription keeps the last known value, retries a bounded number of
- * times, and reports a single structured diagnostic. The button stays
- * operable in every state — the user's explicit choice always wins and is
- * never lost to a failed read. `data-theme-source` exposes which path
- * produced the current value (`'explicit'`, `'system'`, `'fallback'`) so
- * failures are diagnosable from the DOM without opening the console.
- *
- * Clicking flips `themeMode` to the *explicit* opposite of the currently
- * resolved theme (e.g. resolved-dark → `'light'`), never back to `'system'`.
- */
-export default function ThemeToggle() {
-  const { themeMode, setThemeMode } = useSettings()
-  const { reading, resync } = useSystemPrefersDark()
-
-  // Re-read when themeMode changes (e.g. the user picks 'system' on the
-  // Settings page) so an environment that recovered after the bounded retries
-  // were exhausted is picked up without a page reload.
-  const lastModeRef = useRef(themeMode)
-  useEffect(() => {
-    if (lastModeRef.current === themeMode) return
-    lastModeRef.current = themeMode
-    resync()
-  }, [themeMode, resync])
-
-  const resolved: 'light' | 'dark' =
-    themeMode === 'system' ? (reading.prefersDark ? 'dark' : 'light') : themeMode
-  const nextTheme = resolved === 'dark' ? 'light' : 'dark'
-  const themeSource =
-    themeMode !== 'system' ? 'explicit' : reading.source === 'media' ? 'system' : 'fallback'
+  const handleClick = () => setThemeMode(nextTheme)
+  const actionLabel = `Switch to ${nextTheme} theme`
 
   return (
     <button

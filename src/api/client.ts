@@ -461,25 +461,29 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, headers, idempotencyKey, skipRateLimit, amountFields, identityEpoch, ...init } =
-    options
-
   // Exact-amount gate: validate and canonicalize declared amount fields
   // BEFORE any state change. An invalid amount must never consume
   // rate-limit budget or reach the network, and must never mutate the
   // caller's body object.
+  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, amountFields, ...init } =
+    options
   const wireBody = applyAmountFields(body, amountFields)
   const hasJsonBody = isJsonBody(wireBody)
 
   // Pre-flight: deterministic, request-independent failures.
   const url = buildUrl(path)
-  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
-  if (hasJsonBody && typeof serializedBody === 'string') {
-    if (new TextEncoder().encode(serializedBody).byteLength > MAX_REQUEST_BODY_BYTES) {
-      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serializedBody.length })
+  const requestHeaders = buildHeaders(headers, hasJsonBody)
+  const requestBody = hasJsonBody ? JSON.stringify(body) : body
+  // Validate input size before expensive operations. Serializing an oversized
+  // body is wasted work and could exhaust memory or downstream resources.
+  if (hasJsonBody) {
+    const serialized = JSON.stringify(wireBody)
+    if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BODY_BYTES) {
+      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serialized.length })
     }
   }
 
+  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
   const correlationId = generateCorrelationId('api-fetch')
   const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
