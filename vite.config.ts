@@ -84,6 +84,7 @@ export default defineConfig({
         'src/components/AmountInput.tsx',
         'src/components/Badge.tsx',
         'src/components/BackToTop.tsx',
+        'src/components/controls/Select.tsx',
         'src/components/controls/Toggle.tsx',
         'src/hooks/useLocalStorage.ts',
         'src/hooks/useReducedMotion.ts',
@@ -107,6 +108,14 @@ export default defineConfig({
         // BackToTop guards every DOM/window call in its click handler, so each
         // catch arm is a reachable branch that must stay covered.
         'src/components/BackToTop.tsx': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        // Select owns the keyboard/pointer option-picking and its blur/close
+        // recovery paths, so it is held at full coverage.
+        'src/components/controls/Select.tsx': {
           lines: 100,
           branches: 100,
           functions: 100,
