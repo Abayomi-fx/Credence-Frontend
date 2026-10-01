@@ -86,15 +86,22 @@ export default function Select({
         aria-required={ariaRequired}
         aria-busy={isLoading || undefined}
         disabled={isDisabled}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          // The native `disabled` attribute blocks pointer and keyboard input,
+          // but a synthetic change event (form reset replay, programmatic
+          // dispatch, some screen readers) can still reach this handler. Guard
+          // so a disabled or loading control can never emit a selection.
+          if (isDisabled) return
+          onChange(e.target.value)
+        }}
       >
         {options.map((o, index) => (
-          // Keyed by index, not by `o.value`: duplicate option values are invalid
-          // input, but a value-derived key would emit a React duplicate-key
-          // warning and risk reconciling the wrong option across a re-render.
-          // Uniqueness is the caller's contract; this keeps bad input from
-          // corrupting the DOM order that determines what the user sees.
-          <option key={`${o.value}-${index}`} value={o.value}>
+          // Keyed by value plus index, not by `o.value` alone: duplicate option
+          // values are invalid input, but a value-derived key would emit a React
+          // duplicate-key warning and risk reconciling the wrong option across a
+          // re-render. Uniqueness is the caller's contract; this keeps bad input
+          // from corrupting the DOM order that determines what the user sees.
+          <option key={`${o.value}::${index}`} value={o.value}>
             {o.label}
           </option>
         ))}
