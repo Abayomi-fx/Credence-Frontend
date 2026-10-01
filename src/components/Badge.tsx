@@ -202,6 +202,7 @@ export default function Badge({ variant, label, className = '', srPrefix, ariaLa
   const displayLabel =
     sanitizedLabel ||
     (normalizedVariant === 'unknown' ? DEFAULT_LABELS.unknown : DEFAULT_LABELS[normalizedVariant])
+  const accessibleLabel = ariaLabel ?? displayLabel
 
   return (
     <TooltipOnOverflow content={displayLabel}>
