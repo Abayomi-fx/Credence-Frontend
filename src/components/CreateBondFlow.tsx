@@ -14,7 +14,7 @@
  * @see {@link docs/risk-disclaimer.md} for the full risk/slashing policy.
  */
 
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
+import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import AmountInput from './AmountInput'
 import { FormField } from './forms/FormField'
 import Button from './Button'
@@ -40,6 +40,44 @@ import { useReducedMotion } from '../hooks/useReducedMotion'
 import { formatUsdc } from '../lib/format'
 import { LoadingSkeleton } from './states'
 import './CreateBondFlow.css'
+
+// A child render failure has a deterministic recovery action. Do not log the
+// exception itself: callbacks can include private wallet or transaction data.
+class CreateBondFlowErrorBoundary extends React.Component<
+  { children: React.ReactNode; onReset: () => boolean },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch() {
+    console.error('[CreateBondFlow] Unexpected render error')
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false })
+    this.props.onReset()
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="createBondFlow__errorBoundary">
+          <Banner severity="error" title="Unexpected error">
+            An unexpected error occurred. Please retry.
+          </Banner>
+          <Button type="button" onClick={this.handleRetry}>
+            Retry
+          </Button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -139,7 +177,9 @@ const saveAuditLog = (records: BondAuditRecord[]): void => {
 // Divider used between review card sections
 // ---------------------------------------------------------------------------
 
-const ReviewDivider = () => <div className="createBondFlow__reviewDivider" />
+const ReviewDivider = () => (
+  <div aria-hidden="true" className="createBondFlow__reviewDivider" role="separator" />
+)
 
 /**
  * Emits a diagnostic when a wizard transition is refused because the wizard is
@@ -529,289 +569,297 @@ export default function CreateBondFlow({ onComplete, onCancel, onAudit }: Create
 
   return (
     <div className="createBondFlow">
-      <StepIndicator />
+      <CreateBondFlowErrorBoundary onReset={safeReset}>
+        <StepIndicator />
 
-      {resetError && (
-        <div className="createBondFlow__error" role="alert" data-testid="reset-error">
-          ⚠ {resetError}
-        </div>
-      )}
+        {resetError && (
+          <div className="createBondFlow__error" role="alert" data-testid="reset-error">
+            ⚠ {resetError}
+          </div>
+        )}
 
-      {/* ── Step 1: Amount ── */}
-      {step === BOND_FLOW_STEP_AMOUNT && (
-        <div className="createBondFlow__step">
-          <h2 ref={step1Ref} tabIndex={-1} className="createBondFlow__heading">
-            Step 1: Enter Bond Amount
-          </h2>
+        {/* ── Step 1: Amount ── */}
+        {step === BOND_FLOW_STEP_AMOUNT && (
+          <div className="createBondFlow__step">
+            <h2 ref={step1Ref} tabIndex={-1} className="createBondFlow__heading">
+              Step 1: Enter Bond Amount
+            </h2>
 
-          <Banner severity="info">
-            Bonds are locked for a minimum of 30 days. Early withdrawal incurs a slash penalty.
-          </Banner>
+            <Banner severity="info">
+              Bonds are locked for a minimum of 30 days. Early withdrawal incurs a slash penalty.
+            </Banner>
 
-          {/* ── Balance display ── */}
-          <div className="createBondFlow__balanceRow" aria-live="polite" aria-atomic="true">
-            {!isConnected ? (
-              <span className="createBondFlow__balanceText">
-                Connect your wallet to see your available balance.
-              </span>
-            ) : balanceStatus === 'loading' ? (
-              <LoadingSkeleton variant="text" rows={1} width="12rem" />
-            ) : balanceStatus === 'error' ? (
-              <span className="createBondFlow__balanceErrorRow">
-                <span
-                  className="createBondFlow__balanceText"
-                  role="alert"
-                  style={{ color: 'var(--credence-color-danger)' }}
-                >
-                  Could not load balance.
+            {/* ── Balance display ── */}
+            <div className="createBondFlow__balanceRow" aria-live="polite" aria-atomic="true">
+              {!isConnected ? (
+                <span className="createBondFlow__balanceText">
+                  Connect your wallet to see your available balance.
                 </span>
-                <Button
-                  type="button"
-                  onClick={refetchBalance}
-                  className="createBondFlow__retryButton"
-                  style={{ fontSize: '0.75rem', padding: '0.125rem 0.5rem' }}
-                >
-                  Retry
-                </Button>
-              </span>
-            ) : (
-              <span className="createBondFlow__balanceText">Available: {formatUsdc(balance)}</span>
-            )}
-          </div>
-
-          <FormField id="bond-amount" label="Amount (USDC)" error={error || undefined}>
-            <AmountInput
-              value={amount}
-              error={error || undefined}
-              onChange={(next) => {
-                setAmount(next)
-                if (error) setError('')
-              }}
-              balance={balance}
-              placeholder="0"
-              presets={[100, 500, 1000]}
-              currencyLabel="USDC"
-              disabled={!isConnected || balanceStatus !== 'ready'}
-              hideErrorMessage={Boolean(error)}
-              aria-disabled={!isConnected || undefined}
-            />
-          </FormField>
-        </div>
-      )}
-
-      {/* ── Step 2: Duration ── */}
-      {step === BOND_FLOW_STEP_DURATION && (
-        <div className="createBondFlow__step">
-          <h2 ref={step2Ref} tabIndex={-1} className="createBondFlow__heading">
-            Step 2: Choose Lock Duration
-          </h2>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Select how long you want to lock your USDC:
-          </p>
-
-          {error && (
-            <div className="createBondFlow__error" role="alert">
-              ⚠ {error}
-            </div>
-          )}
-
-          <div className="createBondFlow__durationRow">
-            {[30, 90, 180].map((d) => {
-              const isActive = duration === d
-              return (
-                <Button
-                  key={d}
-                  type="button"
-                  onClick={() => {
-                    setDuration(d)
-                    if (error) setError('')
-                  }}
-                  className={
-                    isActive
-                      ? 'createBondFlow__durationButton createBondFlow__durationButton--active'
-                      : 'createBondFlow__durationButton'
-                  }
-                  style={{ transition: durationButtonTransition }}
-                >
-                  {d} Days
-                </Button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── Step 3: Review Terms ── */}
-      {step === BOND_FLOW_STEP_REVIEW && (
-        <div className="createBondFlow__step">
-          <h2 ref={step3Ref} tabIndex={-1} className="createBondFlow__heading">
-            Step 3: Review Terms
-          </h2>
-
-          <Banner severity="warn" title="Early withdrawal — slash exposure">
-            Withdrawing before lock maturity incurs a slash penalty on your principal. The figures
-            below show exactly what you would receive if you exit early.
-          </Banner>
-
-          {/* ── Bond summary card ── */}
-          <div className="createBondFlow__reviewCard">
-            {/* Bond amount */}
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Bond Amount:</span>
-              <strong style={{ color: 'var(--text-primary)' }} data-testid="review-bond-amount">
-                {formatUsdc(Number(amount))}
-              </strong>
-            </div>
-
-            {/* Lock duration */}
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Lock Duration:</span>
-              <strong style={{ color: 'var(--text-primary)' }} data-testid="review-duration">
-                {duration} Days
-              </strong>
-            </div>
-
-            {/* Unlock date */}
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Estimated Unlock Date:</span>
-              <strong style={{ color: 'var(--text-primary)' }} data-testid="review-unlock-date">
-                {duration ? calcUnlockDate(duration) : ''}
-              </strong>
-            </div>
-
-            <ReviewDivider />
-
-            {/* ── Early-withdrawal slash section ── */}
-            <div style={{ display: 'grid', gap: 'var(--credence-space-1)' }}>
-              <span className="createBondFlow__reviewBadgeLabel">If you withdraw early</span>
-            </div>
-
-            {slashBreakdown ? (
-              <>
-                {/* Slash penalty % + amount */}
-                <div
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                >
-                  <span style={{ color: 'var(--text-secondary)' }}>
-                    Slash Penalty ({slashBreakdown.penaltyPercent}%):
-                  </span>
-                  <strong
-                    style={{ color: 'var(--color-danger)' }}
-                    data-testid="review-penalty-amount"
-                  >
-                    −{slashBreakdown.penaltyAmount}
-                  </strong>
-                </div>
-
-                {/* Resulting balance */}
-                <div className="createBondFlow__reviewResult">
+              ) : balanceStatus === 'loading' ? (
+                <LoadingSkeleton variant="text" rows={1} width="12rem" />
+              ) : balanceStatus === 'error' ? (
+                <span className="createBondFlow__balanceErrorRow">
                   <span
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontWeight: 'var(--credence-font-weight-semibold)',
-                    }}
+                    className="createBondFlow__balanceText"
+                    role="alert"
+                    style={{ color: 'var(--credence-color-danger)' }}
                   >
-                    You would receive:
+                    Could not load balance.
                   </span>
-
-                  <strong
-                    style={{
-                      color:
-                        slashBreakdown.resultingUsdc < Number(amount)
-                          ? 'var(--color-danger)'
-                          : 'var(--text-primary)',
-                      fontSize: 'var(--credence-font-size-lg, 1.125rem)',
-                    }}
-                    data-testid="review-resulting-balance"
+                  <Button
+                    type="button"
+                    onClick={refetchBalance}
+                    className="createBondFlow__retryButton"
+                    style={{ fontSize: '0.75rem', padding: '0.125rem 0.5rem' }}
                   >
-                    {slashBreakdown.resultingBalance}
-                  </strong>
-                </div>
-              </>
-            ) : (
-              /* Fallback: breakdown unavailable (should not normally be reached in step 3) */
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Slash Terms:</span>
-                <strong style={{ color: 'var(--color-danger)' }}>Penalties Apply</strong>
+                    Retry
+                  </Button>
+                </span>
+              ) : (
+                <span className="createBondFlow__balanceText">
+                  Available: {formatUsdc(balance)}
+                </span>
+              )}
+            </div>
+
+            <FormField id="bond-amount" label="Amount (USDC)" error={error || undefined}>
+              <AmountInput
+                value={amount}
+                error={error || undefined}
+                onChange={(next) => {
+                  setAmount(next)
+                  if (error) setError('')
+                }}
+                balance={balance}
+                placeholder="0"
+                presets={[100, 500, 1000]}
+                currencyLabel="USDC"
+                disabled={!isConnected || balanceStatus !== 'ready'}
+                hideErrorMessage={Boolean(error)}
+                aria-disabled={!isConnected || undefined}
+              />
+            </FormField>
+          </div>
+        )}
+
+        {/* ── Step 2: Duration ── */}
+        {step === BOND_FLOW_STEP_DURATION && (
+          <div className="createBondFlow__step">
+            <h2 ref={step2Ref} tabIndex={-1} className="createBondFlow__heading">
+              Step 2: Choose Lock Duration
+            </h2>
+            <p style={{ color: 'var(--text-secondary)' }}>
+              Select how long you want to lock your USDC:
+            </p>
+
+            {error && (
+              <div className="createBondFlow__error" role="alert">
+                ⚠ {error}
               </div>
             )}
-          </div>
-        </div>
-      )}
 
-      {/* ── Step 4: Confirm ── */}
-      {step === BOND_FLOW_STEP_CONFIRM && (
-        <div className="createBondFlow__step">
-          <h2 ref={step4Ref} tabIndex={-1} className="createBondFlow__heading">
-            Step 4: Confirm Bond
-          </h2>
-
-          <Disclaimer
-            context="Bonding USDC locks funds in a non-custodial smart contract. Slashing conditions apply."
-            termsHref="#"
-          />
-          {confirmError && (
-            <div className="createBondFlow__error" role="alert">
-              ⚠ {confirmError}
+            <div className="createBondFlow__durationRow">
+              {[30, 90, 180].map((d) => {
+                const isActive = duration === d
+                return (
+                  <Button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      setDuration(d)
+                      if (error) setError('')
+                    }}
+                    className={
+                      isActive
+                        ? 'createBondFlow__durationButton createBondFlow__durationButton--active'
+                        : 'createBondFlow__durationButton'
+                    }
+                    style={{ transition: durationButtonTransition }}
+                  >
+                    {d} Days
+                  </Button>
+                )
+              })}
             </div>
-          )}
-          <label className="createBondFlow__ackLabel">
-            <input
-              type="checkbox"
-              checked={acknowledged}
-              disabled={submitting}
-              onChange={(e) => {
-                consentIdentityRef.current = e.target.checked ? walletIdentity : null
-                setAcknowledged(e.target.checked)
-              }}
+          </div>
+        )}
+
+        {/* ── Step 3: Review Terms ── */}
+        {step === BOND_FLOW_STEP_REVIEW && (
+          <div className="createBondFlow__step">
+            <h2 ref={step3Ref} tabIndex={-1} className="createBondFlow__heading">
+              Step 3: Review Terms
+            </h2>
+
+            <Banner severity="warn" title="Early withdrawal — slash exposure">
+              Withdrawing before lock maturity incurs a slash penalty on your principal. The figures
+              below show exactly what you would receive if you exit early.
+            </Banner>
+
+            {/* ── Bond summary card ── */}
+            <div className="createBondFlow__reviewCard">
+              {/* Bond amount */}
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Bond Amount:</span>
+                <strong style={{ color: 'var(--text-primary)' }} data-testid="review-bond-amount">
+                  {formatUsdc(Number(amount))}
+                </strong>
+              </div>
+
+              {/* Lock duration */}
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Lock Duration:</span>
+                <strong style={{ color: 'var(--text-primary)' }} data-testid="review-duration">
+                  {duration} Days
+                </strong>
+              </div>
+
+              {/* Unlock date */}
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Estimated Unlock Date:</span>
+                <strong style={{ color: 'var(--text-primary)' }} data-testid="review-unlock-date">
+                  {duration ? calcUnlockDate(duration) : ''}
+                </strong>
+              </div>
+
+              <ReviewDivider />
+
+              {/* ── Early-withdrawal slash section ── */}
+              <div style={{ display: 'grid', gap: 'var(--credence-space-1)' }}>
+                <span className="createBondFlow__reviewBadgeLabel">If you withdraw early</span>
+              </div>
+
+              {slashBreakdown ? (
+                <>
+                  {/* Slash penalty % + amount */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      Slash Penalty ({slashBreakdown.penaltyPercent}%):
+                    </span>
+                    <strong
+                      style={{ color: 'var(--color-danger)' }}
+                      data-testid="review-penalty-amount"
+                    >
+                      −{slashBreakdown.penaltyAmount}
+                    </strong>
+                  </div>
+
+                  {/* Resulting balance */}
+                  <div className="createBondFlow__reviewResult">
+                    <span
+                      style={{
+                        color: 'var(--text-secondary)',
+                        fontWeight: 'var(--credence-font-weight-semibold)',
+                      }}
+                    >
+                      You would receive:
+                    </span>
+
+                    <strong
+                      style={{
+                        color:
+                          slashBreakdown.resultingUsdc < Number(amount)
+                            ? 'var(--color-danger)'
+                            : 'var(--text-primary)',
+                        fontSize: 'var(--credence-font-size-lg, 1.125rem)',
+                      }}
+                      data-testid="review-resulting-balance"
+                    >
+                      {slashBreakdown.resultingBalance}
+                    </strong>
+                  </div>
+                </>
+              ) : (
+                /* Fallback: breakdown unavailable (should not normally be reached in step 3) */
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Slash Terms:</span>
+                  <strong style={{ color: 'var(--color-danger)' }}>Penalties Apply</strong>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 4: Confirm ── */}
+        {step === BOND_FLOW_STEP_CONFIRM && (
+          <div className="createBondFlow__step">
+            <h2 ref={step4Ref} tabIndex={-1} className="createBondFlow__heading">
+              Step 4: Confirm Bond
+            </h2>
+
+            <Disclaimer
+              context="Bonding USDC locks funds in a non-custodial smart contract. Slashing conditions apply."
+              termsHref="#"
             />
-            <span>I explicitly acknowledge the slashing terms and lock conditions.</span>
-          </label>
+            {confirmError && (
+              <div className="createBondFlow__error" role="alert">
+                ⚠ {confirmError}
+              </div>
+            )}
+            <label className="createBondFlow__ackLabel">
+              <input
+                type="checkbox"
+                checked={acknowledged}
+                disabled={submitting}
+                onChange={(e) => {
+                  consentIdentityRef.current = e.target.checked ? walletIdentity : null
+                  setAcknowledged(e.target.checked)
+                }}
+              />
+              <span>I explicitly acknowledge the slashing terms and lock conditions.</span>
+            </label>
+          </div>
+        )}
+
+        {/* ── Navigation ── */}
+        <div className="createBondFlow__nav">
+          {step > BOND_FLOW_MIN_STEP && (
+            <Button
+              type="button"
+              onClick={handleBack}
+              disabled={submitting}
+              className="createBondFlow__navButton createBondFlow__backButton"
+            >
+              Back
+            </Button>
+          )}
+
+          {step < BOND_FLOW_MAX_STEP ? (
+            <Button
+              type="button"
+              onClick={handleNext}
+              disabled={submitting}
+              className="createBondFlow__navButton createBondFlow__nextButton"
+            >
+              Next
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={handleConfirm}
+              disabled={!acknowledged || submitting}
+              className="createBondFlow__navButton createBondFlow__confirmButton"
+            >
+              {submitting ? 'Creating Bond…' : 'Confirm & Create Bond'}
+            </Button>
+          )}
+
+          <Button
+            type="button"
+            onClick={handleCancel}
+            disabled={submitting}
+            className="createBondFlow__navButton createBondFlow__cancelButton"
+          >
+            Cancel
+          </Button>
         </div>
-      )}
-
-      {/* ── Navigation ── */}
-      <div className="createBondFlow__nav">
-        {step > BOND_FLOW_MIN_STEP && (
-          <Button
-            type="button"
-            onClick={handleBack}
-            disabled={submitting}
-            className="createBondFlow__navButton createBondFlow__backButton"
-          >
-            Back
-          </Button>
-        )}
-
-        {step < BOND_FLOW_MAX_STEP ? (
-          <Button
-            type="button"
-            onClick={handleNext}
-            disabled={submitting}
-            className="createBondFlow__navButton createBondFlow__nextButton"
-          >
-            Next
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            onClick={handleConfirm}
-            disabled={!acknowledged || submitting}
-            className="createBondFlow__navButton createBondFlow__confirmButton"
-          >
-            {submitting ? 'Creating Bond…' : 'Confirm & Create Bond'}
-          </Button>
-        )}
-
-        <Button
-          type="button"
-          onClick={handleCancel}
-          disabled={submitting}
-          className="createBondFlow__navButton createBondFlow__cancelButton"
-        >
-          Cancel
-        </Button>
-      </div>
+      </CreateBondFlowErrorBoundary>
     </div>
   )
 }

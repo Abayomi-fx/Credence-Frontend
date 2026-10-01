@@ -8,7 +8,7 @@
  *   - Accessibility labels and data-testid targets
  */
 
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import CreateBondFlow from './CreateBondFlow'
@@ -93,6 +93,16 @@ describe('formatUsdc', () => {
 
   it('formats very large numbers', () => {
     expect(formatUsdc(1_000_000)).toBe('1,000,000 USDC')
+  })
+})
+
+describe('ReviewDivider', () => {
+  it('renders a stable non-interactive separator on the review step', async () => {
+    await reachStep3('1000')
+
+    const divider = screen.getByRole('separator', { hidden: true })
+    expect(divider).toHaveClass('createBondFlow__reviewDivider')
+    expect(divider).toHaveAttribute('aria-hidden', 'true')
   })
 })
 
@@ -444,8 +454,8 @@ describe('CreateBondFlow – step 4 confirm', () => {
     const user = userEvent.setup()
     await reachStep4()
     await user.click(screen.getByRole('checkbox'))
-    fireEvent.click(screen.getByRole('button', { name: /Confirm & Create Bond/i }))
-    expect(screen.getByText(/Step 1: Enter Bond Amount/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Confirm & Create Bond/i }))
+    await waitFor(() => expect(screen.getByText(/Step 1: Enter Bond Amount/i)).toBeInTheDocument())
   })
 })
 
