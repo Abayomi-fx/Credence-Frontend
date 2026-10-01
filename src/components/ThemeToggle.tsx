@@ -1,12 +1,63 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './ThemeToggle.css'
 
-// SunIcon renders the light-theme glyph. It is a pure, deterministic function of its props.
-// Invariants:
-//   - Always renders exactly one <svg> with the shared theme-toggle icon class.
-//   - Marked aria-hidden="true" so the accessible name comes from the button.
-//   - Never throws for any input; adverse conditions degrade to a valid SVG tree.
-export function SunIcon() {
+const THEME_STORAGE_KEY = 'theme'
+const THEME_CHANNEL_EVENT = 'theme-change'
+
+const DARK_QUERY = '(prefers-color-scheme: dark)'
+
+export type Theme = 'light' | 'dark'
+
+function isValidTheme(value: unknown): value is Theme {
+  return value === 'light' || value === 'dark'
+}
+
+/**
+ * Safely read the persisted theme.
+ *
+ * Invariants:
+ * - Never throws. Storage may be disabled (private mode, SecurityError,
+ *   QuotaExceededError, etc.) or contain arbitrary corrupted data.
+ * - Returns `undefined` for any value that is not exactly 'light' | 'dark'.
+ *   Corrupt / injected values are never propagated into the DOM or state.
+ */
+export function readPersistedTheme(): Theme | undefined {
+  if (typeof window === 'undefined') return undefined
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY)
+    return isValidTheme(saved) ? saved : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Safely persist the theme. Failures are swallowed so a quota/security
+ * error never breaks the toggle or loses the in-memory state.
+ */
+export function persistTheme(theme: Theme): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+  } catch {
+    // Persistence is best-effort; the in-memory theme remains authoritative.
+  }
+}
+
+function readOSPreference(): Theme {
+  if (typeof window === 'undefined') return 'light'
+  try {
+    if (typeof window.matchMedia !== 'function') return 'light'
+    return window.matchMedia(DARK_QUERY).matches ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
+function resolveTheme(): Theme {
+  return readPersistedTheme() ?? readOSPreference()
+}
+function SunIcon() {
   return (
     <svg
       className="theme-toggle__icon"
@@ -40,7 +91,8 @@ export function MoonIcon() {
 }
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(resolveTheme)
+  const [theme, setTheme] = useState<Theme>(resolveInitialTheme)
+
   // Tracks whether the user has explicitly chosen a theme during this mount.
   // While false, OS preference changes are honored; once true, they are ignored
   // so an explicit choice is never silently overwritten.
@@ -48,6 +100,12 @@ export default function ThemeToggle() {
   // Guards against out-of-order / duplicate async writes from a rapid
   // succession of toggles or OS events: only the latest commit is applied.
   const writeGeneration = useRef(0)
+
+  // Tracks whether the most recent toggle attempt was applied to the document.
+  // Used to give the button a deterministic, diagnosable error state without
+  // losing the user's chosen theme in memory.
+  const [error, setError] = useState<string | null>(null)
+  const lastAppliedRef = useRef<Theme | null>(null)
 
   // Single source of truth for applying a theme to the document and storage.
   // Idempotent: repeated calls with the same theme are no-ops.
@@ -70,80 +128,40 @@ export default function ThemeToggle() {
 
   // Keep the document in sync with the current theme on every commit.
   useEffect(() => {
-    try {
+try {
       document.documentElement.dataset.theme = theme
+      lastAppliedRef.current = theme
+      setError(null)
     } catch {
-      // ignore DOM availability failures
+      // Never throw from an effect: a theme write failure must not crash the tree.
+      // Surface a generic message; do not leak the underlying error.
+      setError('Unable to apply the theme.')
     }
-    persistTheme(theme)
+
+    try {
+      window.localStorage.setItem('theme', theme)
+    } catch {
+      // Persistence failure is non-fatal: the in-memory theme remains authoritative.
+    }
   }, [theme])
 
-  // React to OS preference changes only while no explicit choice exists.
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return
-    }
+const toggleTheme = useCallback(() => {
+  setTheme((current) => (current === 'light' ? 'dark' : 'light'))
+}, [])
 
-    let mql: MediaQueryList
-    try {
-      mql = window.matchMedia(DARK_QUERY)
-    } catch {
-      return
-    }
-
-    const handleChange = (event: MediaQueryListEvent) => {
-      if (hasExplicitChoice.current) return
-      commitTheme(event.matches ? 'dark' : 'light')
-    }
-
-    if (typeof mql.addEventListener === 'function') {
-      mql.addEventListener('change', handleChange)
-      return () => mql.removeEventListener('change', handleChange)
-    }
-
-    // Legacy Safari / fallback API.
-    if (typeof mql.addListener === 'function') {
-      mql.addListener(handleChange)
-      return () => mql.removeListener(handleChange)
-    }
-
-    return undefined
-  }, [commitTheme])
-
-  // External consumers (e.g. the Settings context) can request a theme
-  // change without duplicating the persistence / DOM invariants.
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const handleExternal = (event: Event) => {
-      const detail = (event as CustomEvent<{ theme?: unknown }>).detail
-      const next = detail?.theme
-      if (!isValidTheme(next)) return
-      hasExplicitChoice.current = true
-      commitTheme(next)
-    }
-
-    window.addEventListener(THEME_CHANNEL_EVENT, handleExternal)
-    return () => window.removeEventListener(THEME_CHANNEL_EVENT, handleExternal)
-  }, [commitTheme])
-
-  const toggleTheme = () => {
-    hasExplicitChoice.current = true
-    commitTheme(theme === 'light' ? 'dark' : 'light')
-  }
-
-  const nextTheme = theme === 'light' ? 'dark' : 'light'
+  const nextTheme: Theme = theme === 'light' ? 'dark' : 'light'
+  const hasError = error !== null
 
   return (
     <button
       type="button"
       className="theme-toggle"
-      onClick={toggleTheme}
+      onClick={handleClick}
       aria-label={`Switch to ${nextTheme} mode`}
       aria-pressed={theme === 'dark'}
-      title={`Switch to ${nextTheme} mode`}
+      aria-invalid={hasError ? 'true' : undefined}
+      title={error ? error : `Switch to ${nextTheme} mode`}
+      data-theme-state={theme}
     >
       {theme === 'light' ? <MoonIcon /> : <SunIcon />}
     </button>
