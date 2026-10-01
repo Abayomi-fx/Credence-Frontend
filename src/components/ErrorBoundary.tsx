@@ -74,7 +74,6 @@ export default class ErrorBoundary extends Component<Props, BoundaryState> {
     const errorName = (error.name ?? '').toLowerCase()
 
     return (
-      message.includes('chunk') ||
       message.includes('failed to load') ||
       message.includes('loading chunk') ||
       message.includes('loading module') ||
