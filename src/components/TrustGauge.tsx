@@ -49,6 +49,16 @@ export interface TrustGaugeProps {
   className?: string
   /** Optional ID for accessibility */
   id?: string
+  /** Indicates if the gauge data is currently loading */
+  isLoading?: boolean
+  /** Any error that occurred while fetching or updating the gauge */
+  error?: Error | null
+  /** Callback to retry fetching or updating the gauge */
+  onRetry?: () => void
+  /** Indicates if the displayed data is stale */
+  isStale?: boolean
+  /** Indicates if the user has permission to view the gauge */
+  hasPermission?: boolean
 }
 
 /**
@@ -207,6 +217,11 @@ export default function TrustGauge({
   id = 'trust-gauge',
   correlationId,
   onCommit,
+  isLoading = false,
+  error = null,
+  onRetry,
+  isStale = false,
+  hasPermission = true,
 }: TrustGaugeProps) {
   const prefersReducedMotion = useReducedMotion()
   const reducedMotionTransition = prefersReducedMotion ? 'none' : undefined
@@ -263,9 +278,16 @@ export default function TrustGauge({
     }
   }, [resolvedScore, resolvedTier])
 
+  const stateClasses = [
+    isLoading ? 'trust-gauge--loading' : '',
+    error ? 'trust-gauge--error' : '',
+    isStale ? 'trust-gauge--stale' : '',
+    !hasPermission ? 'trust-gauge--unauthorized' : ''
+  ].filter(Boolean).join(' ')
+
   return (
     <div
-      className={`trust-gauge ${className}`}
+      className={`trust-gauge ${className} ${stateClasses}`.trim()}
       id={id}
       data-audit-version={TRUST_SCORE_EVENT_VERSION}
       data-audit-parity={tierMismatch ? 'mismatch' : 'match'}
@@ -279,6 +301,35 @@ export default function TrustGauge({
       aria-busy={isLoading}
       aria-invalid={!!error}
     >
+      {!hasPermission && (
+        <div className="trust-gauge__overlay trust-gauge__overlay--permission" role="alert">
+          <p>You do not have permission to view this data.</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="trust-gauge__overlay trust-gauge__overlay--error" role="alert">
+          <p>Error: {error.message}</p>
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="trust-gauge__retry-button">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="trust-gauge__overlay trust-gauge__overlay--loading" aria-busy="true" role="status">
+          <span className="trust-gauge__spinner" />
+          <span className="trust-gauge__loading-text">Loading...</span>
+        </div>
+      )}
+
+      {isStale && !isLoading && !error && (
+        <div className="trust-gauge__banner trust-gauge__banner--stale" role="status">
+          Data may be out of date
+        </div>
+      )}
       {/* Accessible heading and description */}
       <div className="trust-gauge__header">
         <h3 className="trust-gauge__title">Trust Score Gauge</h3>
