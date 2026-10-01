@@ -237,7 +237,7 @@ export default function AmountInput({
 
       {showInlineError && (
         <span id={errorId} className="amountInput__error" role="alert">
-          s {activeError}
+          {activeError}
         </span>
       )}
 
