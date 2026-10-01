@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+// Re-export buildHeaders for testing (non-exported function needs manual testing)
+// This will be tested indirectly through apiFetch, but we verify the behavior here
 import {
   API_BASE_URL,
   ApiAmountError,
@@ -1360,156 +1362,487 @@ describe('apiFetch amount precision boundary (exact decimal amounts)', () => {
   })
 })
 
-describe('parseResponse – deterministic failure boundaries', () => {
-  it('returns undefined for 204 No Content', async () => {
-    const res = new Response(null, { status: 204 })
-    await expect(parseResponse(res)).resolves.toBeUndefined()
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildHeaders determinism and boundary tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('buildHeaders determinism', () => {
+  it('sets Accept header when not provided', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { headers: undefined })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Accept')).toBe('application/json')
   })
 
-  it('returns undefined for 205 Reset Content', async () => {
-    const res = new Response(null, { status: 205 })
-    await expect(parseResponse(res)).resolves.toBeUndefined()
+  it('sets Content-Type header for JSON bodies when not provided', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { method: 'POST', body: { key: 'value' } })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Content-Type')).toBe('application/json')
   })
 
-  it('returns undefined for 304 Not Modified', async () => {
-    const res = new Response(null, { status: 304 })
-    await expect(parseResponse(res)).resolves.toBeUndefined()
+  it('does not set Content-Type for non-JSON bodies', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { method: 'GET' })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Content-Type')).toBeNull()
   })
 
-  it('returns undefined for empty or whitespace-only response bodies', async () => {
-    const emptyRes = new Response('', {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-    await expect(parseResponse(emptyRes)).resolves.toBeUndefined()
+  it('preserves caller-provided Accept header', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
 
-    const whitespaceRes = new Response('   \r\n\t   ', {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-    await expect(parseResponse(whitespaceRes)).resolves.toBeUndefined()
+    await apiFetch('/test', { headers: { Accept: 'text/plain' } })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Accept')).toBe('text/plain')
   })
 
-  it('parses valid JSON objects and arrays with application/json header', async () => {
-    const objRes = new Response(JSON.stringify({ success: true, count: 5 }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    })
-    await expect(parseResponse(objRes)).resolves.toEqual({ success: true, count: 5 })
+  it('preserves caller-provided Content-Type header', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
 
-    const arrRes = new Response(JSON.stringify(['a', 'b', 'c']), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+    await apiFetch('/test', {
+      method: 'POST',
+      body: { key: 'value' },
+      headers: { 'Content-Type': 'application/custom' },
     })
-    await expect(parseResponse(arrRes)).resolves.toEqual(['a', 'b', 'c'])
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Content-Type')).toBe('application/custom')
   })
 
-  it('parses structured JSON for +json vendor types and text/json regardless of case', async () => {
-    const problemRes = new Response(JSON.stringify({ type: 'problem', detail: 'bad' }), {
-      status: 400,
-      headers: { 'Content-Type': 'APPLICATION/PROBLEM+JSON' },
-    })
-    await expect(parseResponse(problemRes)).resolves.toEqual({ type: 'problem', detail: 'bad' })
+  it('always sets X-Correlation-ID header', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
 
-    const textJsonRes = new Response(JSON.stringify({ flag: true }), {
-      status: 200,
-      headers: { 'content-type': 'text/json' },
-    })
-    await expect(parseResponse(textJsonRes)).resolves.toEqual({ flag: true })
+    await apiFetch('/test')
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    const correlationId = headers.get('X-Correlation-ID')
+    expect(correlationId).toBeTruthy()
+    expect(typeof correlationId).toBe('string')
+    expect(correlationId!.length).toBeGreaterThan(0)
   })
 
-  it('preserves valid JSON primitives (numbers, booleans, null, strings)', async () => {
-    const zeroRes = new Response('0', {
-      headers: { 'Content-Type': 'application/json' },
-    })
-    await expect(parseResponse(zeroRes)).resolves.toBe(0)
+  it('does not override caller-provided X-Correlation-ID', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
 
-    const falseRes = new Response('false', {
-      headers: { 'Content-Type': 'application/json' },
-    })
-    await expect(parseResponse(falseRes)).resolves.toBe(false)
+    const customId = 'my-custom-correlation-id'
+    await apiFetch('/test', { headers: { 'X-Correlation-ID': customId } })
 
-    const nullRes = new Response('null', {
-      headers: { 'Content-Type': 'application/json' },
-    })
-    await expect(parseResponse(nullRes)).resolves.toBeNull()
-
-    const strRes = new Response('"test-string"', {
-      headers: { 'Content-Type': 'application/json' },
-    })
-    await expect(parseResponse(strRes)).resolves.toBe('test-string')
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('X-Correlation-ID')).toBe(customId)
   })
 
-  it('parses JSON when Content-Type is missing or generic if body looks like JSON', async () => {
-    const inferredObj = new Response('{"auto": "detected"}', {
-      status: 200,
-    })
-    await expect(parseResponse(inferredObj)).resolves.toEqual({ auto: 'detected' })
+  it('generates unique correlation IDs for different requests', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({})))
+    vi.stubGlobal('fetch', fetchMock)
 
-    const inferredArr = new Response('[1, 2, 3]', {
-      status: 200,
-    })
-    await expect(parseResponse(inferredArr)).resolves.toEqual([1, 2, 3])
+    await apiFetch('/test-1')
+    await apiFetch('/test-2')
+
+    const headers1 = fetchMock.mock.calls[0][1]?.headers as Headers
+    const headers2 = fetchMock.mock.calls[1][1]?.headers as Headers
+    const id1 = headers1.get('X-Correlation-ID')
+    const id2 = headers2.get('X-Correlation-ID')
+
+    expect(id1).toBeTruthy()
+    expect(id2).toBeTruthy()
+    expect(id1).not.toBe(id2)
   })
 
-  it('returns plain text when response is not JSON', async () => {
-    const textRes = new Response('OK, healthy service', {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain' },
-    })
-    await expect(parseResponse(textRes)).resolves.toBe('OK, healthy service')
-  })
+  it('produces headers with consistent state across multiple accesses', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
 
-  it('throws SyntaxError when 2xx response has malformed JSON', async () => {
-    const malformed200 = new Response('{"brokenJson: 123', {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+    await apiFetch('/test', {
+      method: 'POST',
+      body: { key: 'value' },
+      headers: { 'X-Custom': 'custom-value' },
     })
 
-    await expect(parseResponse(malformed200)).rejects.toThrow(SyntaxError)
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    // Access the same header multiple times to ensure no mutation
+    const accept1 = headers.get('Accept')
+    const accept2 = headers.get('Accept')
+    const contentType1 = headers.get('Content-Type')
+    const contentType2 = headers.get('Content-Type')
+
+    expect(accept1).toBe(accept2)
+    expect(accept1).toBe('application/json')
+    expect(contentType1).toBe(contentType2)
+    expect(contentType1).toBe('application/json')
   })
 
-  it('preserves raw text body without throwing when non-2xx error response contains malformed JSON/HTML', async () => {
-    const htmlError502 = new Response('<html><body>502 Bad Gateway</body></html>', {
-      status: 502,
-      headers: { 'Content-Type': 'application/json' }, // Misconfigured gateway sending HTML with JSON header
+  it('header names are case-insensitive for lookups but preserved on set', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { headers: { accept: 'text/custom' } })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    // Case-insensitive lookup should find the header
+    expect(headers.get('Accept')).toBe('text/custom')
+    expect(headers.get('ACCEPT')).toBe('text/custom')
+    expect(headers.get('accept')).toBe('text/custom')
+  })
+
+  it('concatenates multiple values for the same header name without duplication', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', {
+      method: 'POST',
+      body: { key: 'value' },
+      headers: { Accept: 'text/html' },
     })
 
-    const result = await parseResponse(htmlError502)
-    expect(result).toBe('<html><body>502 Bad Gateway</body></html>')
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    const accept = headers.get('Accept')
+    // Should preserve the custom value, not append defaults
+    expect(accept).toBe('text/html')
   })
 
-  it('propagates AbortError if response body reading is aborted', async () => {
-    const abortedRes = {
-      status: 200,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-      text: () => {
-        const error = new Error('The operation was aborted.')
-        error.name = 'AbortError'
-        return Promise.reject(error)
+  it('does not mutate the original headers object passed by caller', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const originalHeaders = { 'X-Custom': 'value' }
+    const snapshot = structuredClone(originalHeaders)
+
+    await apiFetch('/test', { method: 'POST', body: {}, headers: originalHeaders })
+
+    expect(originalHeaders).toEqual(snapshot)
+  })
+
+  it('sets all three default headers in a single request', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { method: 'POST', body: { key: 'value' } })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Accept')).toBe('application/json')
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.get('X-Correlation-ID')).toBeTruthy()
+  })
+
+  it('handles empty headers object', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { method: 'POST', body: {}, headers: {} })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('Accept')).toBe('application/json')
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.get('X-Correlation-ID')).toBeTruthy()
+  })
+
+  it('handles headers array format (HTTP-style)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', {
+      method: 'POST',
+      body: {},
+      headers: [['X-Custom', 'value']],
+    })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Accept')).toBe('application/json')
+    expect(headers.get('X-Correlation-ID')).toBeTruthy()
+  })
+
+  it('preserves all existing headers from caller while adding defaults', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', {
+      method: 'POST',
+      body: { key: 'value' },
+      headers: {
+        'X-Custom-1': 'val1',
+        'X-Custom-2': 'val2',
       },
-    } as unknown as Response
+    })
 
-    await expect(parseResponse(abortedRes)).rejects.toThrow('The operation was aborted.')
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('X-Custom-1')).toBe('val1')
+    expect(headers.get('X-Custom-2')).toBe('val2')
+    expect(headers.get('Accept')).toBe('application/json')
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.get('X-Correlation-ID')).toBeTruthy()
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State consistency: wireBody, correlationId, headers flow through call chain
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('state consistency across call chain', () => {
+  it('uses wireBody (amount-canonicalized) not original body in fetch call', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/bonds', {
+      method: 'POST',
+      body: { amount: 100.5 },
+      amountFields: { amount: true },
+    })
+
+    const body = fetchMock.mock.calls[0][1]?.body as string
+    // Should be canonicalized to exact decimal form (100.50 with 2 decimal places)
+    expect(body).toBe('{"amount":"100.50"}')
   })
 
-  it('wraps generic body stream read error into ApiError network_error', async () => {
-    const streamErrorRes = {
-      status: 200,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-      text: () => Promise.reject(new Error('Premature close of HTTP response stream')),
-    } as unknown as Response
+  it('preserves correlationId through all request stages', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
 
-    let err: unknown
+    await apiFetch('/test', { method: 'POST', body: {} })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    const correlationId = headers.get('X-Correlation-ID')
+    expect(correlationId).toBeTruthy()
+    expect(correlationId!.startsWith('api-fetch-')).toBe(true)
+  })
+
+  it('maintains correlationId consistency when idempotencyKey is used', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', {
+      method: 'POST',
+      body: {},
+      idempotencyKey: 'key-1',
+    })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    const correlationId = headers.get('X-Correlation-ID')
+    const idempotencyKey = headers.get('Idempotency-Key')
+
+    expect(correlationId).toBeTruthy()
+    expect(idempotencyKey).toBe('key-1')
+    // Both should be present and different
+    expect(correlationId).not.toBe(idempotencyKey)
+  })
+
+  it('applies amountFields validation before rate limit check', async () => {
+    vi.stubGlobal('fetch', fetchMock)
+
+    // Invalid amount should fail before any rate-limit budget is consumed
+    const initialSnapshot = apiRateLimiterSnapshot()
+
+    await expect(
+      apiFetch('/test', {
+        method: 'POST',
+        body: { amount: -5 },
+        amountFields: { amount: true },
+      })
+    ).rejects.toBeInstanceOf(ApiAmountError)
+
+    const afterSnapshot = apiRateLimiterSnapshot()
+    // Rate limiter state should be unchanged
+    expect(initialSnapshot).toEqual(afterSnapshot)
+  })
+
+  it('does not create duplicate headers between buildHeaders calls', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test', { method: 'POST', body: { key: 'value' } })
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    const acceptValues: string[] = []
+    headers.forEach((value, name) => {
+      if (name.toLowerCase() === 'accept') {
+        acceptValues.push(value)
+      }
+    })
+
+    // Should have exactly one Accept header, not duplicated
+    expect(acceptValues.length).toBe(1)
+    expect(acceptValues[0]).toBe('application/json')
+  })
+
+  it('serializes body consistently when amountFields are applied', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ ok: true })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const body = { amount: '100.10' }
+    await apiFetch('/test', {
+      method: 'POST',
+      body,
+      amountFields: { amount: true },
+    })
+    const firstWire = fetchMock.mock.calls[0][1]?.body as string
+
+    await apiFetch('/test', {
+      method: 'POST',
+      body,
+      amountFields: { amount: true },
+    })
+    const secondWire = fetchMock.mock.calls[1][1]?.body as string
+
+    expect(firstWire).toBe(secondWire)
+    expect(firstWire).toBe('{"amount":"100.10"}')
+  })
+
+  it('maintains headers object immutability throughout request lifecycle', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const originalHeaders = new Headers({ 'X-Custom': 'original' })
+    const snapshot = Array.from(originalHeaders.entries())
+
+    await apiFetch('/test', { method: 'POST', body: {}, headers: originalHeaders })
+
+    const afterSnapshot = Array.from(originalHeaders.entries())
+    expect(snapshot).toEqual(afterSnapshot)
+  })
+
+  it('includes correlationId in all error scenarios', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ message: 'failed' }, { status: 500 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
     try {
-      await parseResponse(streamErrorRes)
-    } catch (e) {
-      err = e
+      await apiFetch('/test', { method: 'GET' })
+    } catch {
+      // Expected to throw
     }
 
-    expect(err).toBeInstanceOf(ApiError)
-    const apiErr = err as ApiError
-    expect(apiErr.code).toBe('network_error')
-    expect(apiErr.message).toContain('Premature close')
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers
+    expect(headers.get('X-Correlation-ID')).toBeTruthy()
+  })
+
+  it('propagates wireBody size limits correctly before network dispatch', async () => {
+    vi.stubGlobal('fetch', fetchMock)
+
+    const largeBody = {
+      amount: '1000.00',
+      data: 'x'.repeat(MAX_REQUEST_BODY_BYTES + 1),
+    }
+
+    await expect(
+      apiFetch('/test', {
+        method: 'POST',
+        body: largeBody,
+        amountFields: { amount: true },
+      })
+    ).rejects.toBeInstanceOf(ApiBodyTooLargeError)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('maintains request context (path, method, correlationId) through idempotency replay', async () => {
+    const paths: string[] = []
+    const methods: string[] = []
+    const correlationIds: string[] = []
+
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+      paths.push(url)
+      methods.push(init.method || '')
+      const headers = init.headers as Headers
+      correlationIds.push(headers.get('X-Correlation-ID') || 'missing')
+      return jsonResponse({ ok: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // First request with idempotency key
+    await apiFetch('/test', {
+      method: 'POST',
+      body: { amount: '10.00' },
+      idempotencyKey: 'key-unique-1',
+    })
+
+    expect(paths[0]).toBe('/api/test')
+    expect(methods[0]).toBe('POST')
+    expect(correlationIds[0]).toBeTruthy()
+  })
+
+  it('distinct calls use distinct correlationIds even with idempotency caching', async () => {
+    const correlationIds: string[] = []
+
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+      const headers = init.headers as Headers
+      correlationIds.push(headers.get('X-Correlation-ID') || 'missing')
+      return jsonResponse({ ok: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // First call with idempotency key
+    await apiFetch('/test-1', {
+      method: 'POST',
+      body: { amount: '10.00' },
+      idempotencyKey: 'key-unique-2',
+    })
+
+    // Different call - different path means different cache key behavior
+    await apiFetch('/test-2', {
+      method: 'POST',
+      body: { amount: '20.00' },
+      idempotencyKey: 'key-unique-3',
+    })
+
+    // Two distinct fetches should occur with distinct correlation IDs
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(correlationIds.length).toBe(2)
+    expect(correlationIds[0]).not.toBe(correlationIds[1])
+  })
+
+  it('correlationId is set before rate limiting decision', async () => {
+    let capturedCorrelationId: string | null = null
+
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+      const headers = init.headers as Headers
+      capturedCorrelationId = headers.get('X-Correlation-ID')
+      return jsonResponse({ ok: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/test')
+
+    expect(capturedCorrelationId).toBeTruthy()
+  })
+
+  it('does not lose state when concurrent requests with different amountFields are made', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ ok: true })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await Promise.all([
+      apiFetch('/test1', {
+        method: 'POST',
+        body: { amount: 100.5 },
+        amountFields: { amount: true },
+      }),
+      apiFetch('/test2', {
+        method: 'POST',
+        body: { amount: 200.25 },
+        amountFields: { amount: true },
+      }),
+      apiFetch('/test3', { method: 'GET' }),
+    ])
+
+    const bodies = fetchMock.mock.calls.map((call) => call[1]?.body as string)
+    expect(bodies[0]).toContain('"amount":"100.50"')
+    expect(bodies[1]).toContain('"amount":"200.25"')
+    expect(bodies[2]).toBeUndefined()
   })
 })

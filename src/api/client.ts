@@ -13,7 +13,18 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
    * validated and serialized exactly at this boundary.
    */
   amountFields?: ApiAmountFields
-  /** When provided, the request is only dispatched if the active identity epoch matches. */
+
+  /**
+   * When provided, the request is only dispatched if the active identity
+   * epoch matches this value at call time **and** when the response arrives.
+   * A mismatch at either point causes the promise to reject with
+   * {@link ApiSessionConflictError}, leaving no partial state.
+   *
+   * Pass the epoch obtained from {@link getIdentityEpoch} at the moment the
+   * caller reads the identity it intends to act on. The client advances the
+   * epoch automatically on every {@link setIdentityEpoch} call (disconnect,
+   * reconnect, expiry).
+   */
   identityEpoch?: number
 }
 
@@ -63,6 +74,25 @@ export class ApiAmountError extends ApiError {
   }
 }
 
+/**
+ * Thrown by `apiFetch` when a session identity conflict is detected.
+ *
+ * A conflict is detected in two places:
+ *
+ * 1. **Pre-flight** — the caller supplied an `identityEpoch` option and the
+ *    active epoch has already advanced (disconnect / reconnect / expiry) before
+ *    the request even hits the network. The request is never dispatched.
+ *
+ * 2. **Post-flight** — the epoch advanced *while* the request was in-flight
+ *    (e.g. the user disconnected their wallet before the response arrived). The
+ *    response is discarded and the promise rejects with this error. No partial
+ *    state is committed.
+ *
+ * `status` is `409` so existing `err instanceof ApiError` handlers keep
+ * working; code that wants specific conflict handling can narrow on this class
+ * or on `err.status === 409`. Do **not** retry automatically — re-acquire a
+ * fresh epoch via {@link getIdentityEpoch} and re-issue.
+ */
 export class ApiSessionConflictError extends ApiError {
   readonly staleEpoch: number
   readonly currentEpoch: number
@@ -368,6 +398,15 @@ function applyAmountFields(
   return wireBody
 }
 
+/**
+ * Builds request headers with deterministic defaults.
+ *
+ * - Always sets `Accept: application/json` unless already present
+ * - Sets `Content-Type: application/json` if body is JSON and not already present
+ * - Always sets `X-Correlation-ID` unless already present (required for traceability)
+ *
+ * Does not mutate the input headers object. Returns a new Headers instance.
+ */
 function buildHeaders(
   headers: HeadersInit | undefined,
   hasJsonBody: boolean,
@@ -461,6 +500,16 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  const {
+    body,
+    headers,
+    idempotencyKey,
+    skipRateLimit,
+    amountFields,
+    identityEpoch,
+    ...init
+  } = options
+
   // Exact-amount gate: validate and canonicalize declared amount fields
   // BEFORE any state change. An invalid amount must never consume
   // rate-limit budget or reach the network, and must never mutate the
