@@ -673,9 +673,10 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     serializedBody = wireBody ?? undefined
   }
 
-  const serializedBody = hasJsonBody
-    ? JSON.stringify(wireBody)
-    : ((wireBody as BodyInit) ?? undefined)
+  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+  // Pre-flight: deterministic, request-independent failures.
+  const url = buildUrl(path)
+const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
   const correlationId = generateCorrelationId('api-fetch')
   const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
