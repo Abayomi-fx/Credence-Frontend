@@ -181,29 +181,9 @@ export default function AddressInput({
     onValidationChange?.(isValid)
   }, [isValid, onValidationChange])
 
-  /**
-   * Applies the shared sanitizer to raw input, forwards the (prefix-stripped)
-   * value upstream, and records whether suspicious characters were detected.
-   * Returns the sanitized value so callers can make decisions without
-   * duplicating the stripping logic.
-   */
-  const acceptSanitizedValue = useCallback(
-    (raw: string): string => {
-      const result = sanitizeAddressInput(raw)
-      if (result.ok) {
-        setHasSuspiciousChars(false)
-        onChange(result.value)
-        return result.value
-      }
-      setHasSuspiciousChars(true)
-      onChange(result.fallbackValue)
-      return result.fallbackValue
-    },
-    [onChange]
-  )
-
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    acceptSanitizedValue(e.target.value)
+    const newValue = e.target.value
+    onChange(newValue)
 
     // Mark as attempted if user starts typing
     if (!attempted) {

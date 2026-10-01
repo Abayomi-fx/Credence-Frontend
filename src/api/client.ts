@@ -190,45 +190,8 @@ function rejectBaseUrl(): '' {
 export { normalizeBaseUrl }
 export function normalizeBaseUrl(value: string): string {
   const trimmed = typeof value === 'string' ? value.trim() : ''
-  if (!trimmed || trimmed === '/') {
-    return ''
-  }
-
-  // `//host` and `/\host` are resolved by fetch as protocol-relative URLs, so
-  // keeping them would send every API request — including Authorization
-  // headers — to a foreign origin. Fail closed instead.
-  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
-    return rejectBaseUrl()
-  }
-
-  if (trimmed.startsWith('/')) {
-    if (trimmed.includes('?') || trimmed.includes('#')) {
-      return rejectBaseUrl()
-    }
-    return trimmed.replace(/\/+$/, '')
-  }
-
-  // Anything else must be an explicit absolute http(s) URL. This rejects
-  // scheme-less typos (`api.example.com`, which fetch would resolve as a
-  // same-origin *path* and silently 404) and dangerous schemes
-  // (`javascript:`, `data:`, `blob:`, `file:`).
-  if (!/^https?:\/\//i.test(trimmed)) {
-    return rejectBaseUrl()
-  }
-
-  let parsed: URL
-  try {
-    parsed = new URL(trimmed)
-  } catch {
-    return rejectBaseUrl()
-  }
-  if (parsed.search || parsed.hash) {
-    return rejectBaseUrl()
-  }
-
-  return trimmed.replace(/\/+$/, '')
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
 }
-
 type ReplayEntry = {
   fingerprint: string
   promise: Promise<unknown>
