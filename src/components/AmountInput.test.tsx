@@ -217,6 +217,12 @@ describe('AmountInput', () => {
   })
 
   describe('error state', () => {
+    it('renders inline errors without leaking formatting characters', () => {
+      renderInput({ error: 'Amount is invalid' })
+      expect(screen.getByRole('alert')).toHaveTextContent('Amount is invalid')
+      expect(screen.getByRole('alert')).not.toHaveTextContent(/^s /)
+    })
+
     it('sets data-invalid="true" when error prop is provided', () => {
       renderInput({ error: 'Amount exceeds balance' })
       const wrapper = screen.getByRole('textbox').closest('.amountInput')
