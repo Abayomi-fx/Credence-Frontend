@@ -17,7 +17,12 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
 /** Machine-readable classification for API failures. */
 export type ApiErrorCode = 'invalid_request_url' | 'network_error' | 'http_error'
 
-/** Amount-field declarations allowed by the JSON-boundary gate. */
+/**
+ * Declaration of decimal amount fields for a request body.
+ *
+ * - `string[]`: field names validated with the default USDC rules.
+ * - `Record<string, AmountRules | true>`: per-field rules (`true` = defaults).
+ */
 export type ApiAmountFields = string[] | Record<string, AmountRules | true>
 
 /** Rejection reasons for declared amount fields. */
@@ -130,26 +135,147 @@ function rejectBaseUrl(): '' {
 
 export function normalizeBaseUrl(value: string): string {
   const trimmed = typeof value === 'string' ? value.trim() : ''
-  if (!trimmed || trimmed === '/') return ''
+  if (!trimmed || trimmed === '/') {
+    return ''
+  }
 
-  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) return rejectBaseUrl()
+  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
+    return rejectBaseUrl()
+  }
+
   if (trimmed.startsWith('/')) {
-    if (trimmed.includes('?') || trimmed.includes('#')) return rejectBaseUrl()
+    if (trimmed.includes('?') || trimmed.includes('#')) {
+      return rejectBaseUrl()
+    }
     return trimmed.replace(/\/+$/, '')
   }
 
-  if (!/^https?:\/\//i.test(trimmed)) return rejectBaseUrl()
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return rejectBaseUrl()
+  }
 
+  let parsed: URL
   try {
-    const parsed = new URL(trimmed)
-    if (parsed.search || parsed.hash) return rejectBaseUrl()
-    return trimmed.replace(/\/+$/, '')
+    parsed = new URL(trimmed)
   } catch {
     return rejectBaseUrl()
   }
+  if (parsed.search || parsed.hash) {
+    return rejectBaseUrl()
+  }
+
+  return trimmed.replace(/\/+$/, '')
 }
 
-export const API_BASE_URL = normalizeBaseUrl(env?.VITE_API_BASE_URL || '/api')
+type ReplayEntry = {
+  fingerprint: string
+  promise: Promise<unknown>
+}
+
+const replayEntries = new Map<string, ReplayEntry>()
+
+// ── Identity epoch ──────────────────────────────────────────────────────────
+//
+// A monotonic counter advanced on every session boundary (connect, disconnect,
+// expiry, reconnect, account change). Callers capture the current epoch with
+// `getIdentityEpoch()` and pass it to `apiFetch` via the `identityEpoch`
+// option; the client checks it both before dispatching and when the response
+// arrives, rejecting with `ApiSessionConflictError` and discarding stale
+// results so no partial state leaks across sessions.
+let _identityEpoch = 0
+
+/** Returns the current identity epoch counter. */
+export function getIdentityEpoch(): number {
+  return _identityEpoch
+}
+
+/** Advances the identity epoch by 1 and returns the new value. */
+export function advanceIdentityEpoch(): number {
+  _identityEpoch += 1
+  return _identityEpoch
+}
+
+/**
+ * Advances the identity epoch, or sets it to an explicit value when one is
+ * given. Session-boundary callers (disconnect / expiry / reconnect / account
+ * change) use this to record the newly active identity epoch.
+ */
+export function setIdentityEpoch(epoch?: number): number {
+  _identityEpoch = epoch ?? _identityEpoch + 1
+  return _identityEpoch
+}
+
+/** Resets the identity epoch to 0. Test-only. */
+export function resetIdentityEpoch(): void {
+  _identityEpoch = 0
+}
+
+/**
+ * Process-wide default rate limiter consulted by `apiFetch`.
+ *
+ * Built once at module init from environment overrides on top of
+ * {@link DEFAULT_API_RATE_LIMIT}. Exposed (read-only via {@link
+ * apiRateLimiterSnapshot}) so tests can inspect current configuration and
+ * tear down bucket state via {@link resetApiRateLimiter}.
+ */
+const rateLimitOverrides = readApiRateLimitOverrides({
+  VITE_API_RATE_LIMIT_MAX: env?.VITE_API_RATE_LIMIT_MAX,
+  VITE_API_RATE_LIMIT_WINDOW_MS: env?.VITE_API_RATE_LIMIT_WINDOW_MS,
+  VITE_API_RATE_LIMIT_ENABLED: env?.VITE_API_RATE_LIMIT_ENABLED,
+})
+
+export const defaultApiRateLimiter = new ApiRateLimiter({
+  maxRequests: rateLimitOverrides.maxRequests ?? DEFAULT_API_RATE_LIMIT.maxRequests,
+  windowMs: rateLimitOverrides.windowMs ?? DEFAULT_API_RATE_LIMIT.windowMs,
+  enabled: rateLimitOverrides.enabled ?? DEFAULT_API_RATE_LIMIT.enabled,
+})
+
+/**
+ * Read-only snapshot of the active rate-limiter configuration.
+ *
+ * The returned object is deep-frozen at runtime — callers cannot mutate it
+ * through the type system or at language level.
+ */
+export function apiRateLimiterSnapshot(): Readonly<{
+  maxRequests: number
+  windowMs: number
+  enabled: boolean
+}> {
+  const cfg = defaultApiRateLimiter.config
+  return Object.freeze({
+    maxRequests: cfg.maxRequests,
+    windowMs: cfg.windowMs,
+    enabled: cfg.enabled,
+  })
+}
+
+/**
+ * Resets the process-wide default limiter to an empty window.
+ *
+ * Intended for tests that call `apiFetch` repeatedly and would otherwise
+ * saturate the bucket. Not for production use.
+ */
+export function resetApiRateLimiter(): void {
+  defaultApiRateLimiter.reset()
+}
+
+/**
+ * Reports an unusable `VITE_API_BASE_URL` and yields the same-origin fallback.
+ *
+ * The offending value is deliberately **not** echoed: a base URL may embed
+ * credentials (`https://user:token@host`) and the value is already visible in
+ * the operator's own `.env` file. Only the classification is logged.
+ */
+function rejectBaseUrl(): '' {
+  if (IS_DEV) {
+    console.warn(
+      '[api] VITE_API_BASE_URL is not a supported API base. Expected an empty value, ' +
+        'a root-relative prefix (e.g. "/api"), or an absolute http(s) origin. ' +
+        'Falling back to same-origin requests.'
+    )
+  }
+  return ''
+}
 
 function redactPathForDiagnostics(value: unknown): string {
   if (typeof value !== 'string') return typeof value
@@ -273,7 +399,11 @@ function applyAmountFields(
   return wireBody
 }
 
-function buildHeaders(headers: HeadersInit | undefined, hasJsonBody: boolean, correlationId?: string): Headers {
+function buildHeaders(
+  headers: HeadersInit | undefined,
+  hasJsonBody: boolean,
+  correlationId: string
+): Headers {
   const nextHeaders = new Headers(headers)
   if (!nextHeaders.has('Accept')) nextHeaders.set('Accept', 'application/json')
   if (hasJsonBody && !nextHeaders.has('Content-Type')) nextHeaders.set('Content-Type', 'application/json')
@@ -327,13 +457,37 @@ function replayConflict(key: string): ApiError {
   })
 }
 
-const replayEntries = new Map<string, { fingerprint: string; promise: Promise<unknown> }>()
+/**
+ * Issues a JSON API request and returns the parsed body.
+ *
+ * Failure taxonomy — every rejection carries an {@link ApiError} that says
+ * *which* stage failed, so callers can distinguish a retryable network blip
+ * from a non-retryable programming fault:
+ *
+ * | Stage                       | `status` | `code`                 | Retryable |
+ * | --------------------------- | -------- | ---------------------- | --------- |
+ * | URL/path validation         | `0`      | `invalid_request_url`  | no        |
+ * | transport (offline, CORS)   | `0`      | `network_error`        | yes       |
+ * | non-2xx response            | status   | `http_error`           | per status |
+ * | caller aborted via `signal` | —        | rethrown `AbortError`  | n/a       |
+ *
+ * `buildUrl`, header construction, and body serialization all run *before* the
+ * network `try` block. A caller mistake is therefore never re-wrapped as
+ * `status: 0` / `network_error`, which previously hid the real cause and could
+ * make a permanent fault look like a transient one worth retrying.
+ */
+export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, ...init } = options
+  const hasJsonBody = isJsonBody(body)
 
-let _identityEpoch = 0
-
-export function getIdentityEpoch(): number {
-  return _identityEpoch
-}
+  // Validate input size before expensive operations. Serializing an oversized
+  // body is wasted work and could exhaust memory or downstream resources.
+  if (hasJsonBody) {
+    const serialized = JSON.stringify(body)
+    if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BODY_BYTES) {
+      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serialized.length })
+    }
+  }
 
 export function advanceIdentityEpoch(): number {
   _identityEpoch += 1
