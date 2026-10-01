@@ -483,7 +483,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   // Validate input size before expensive operations. Serializing an oversized
   // body is wasted work and could exhaust memory or downstream resources.
   if (hasJsonBody) {
-    const serialized = JSON.stringify(body)
+    const serialized = JSON.stringify(wireBody)
     if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BODY_BYTES) {
       throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serialized.length })
     }
