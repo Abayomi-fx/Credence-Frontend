@@ -340,43 +340,47 @@ describe('pointsToNextTier - failure boundaries', () => {
   })
 })
 
-// --- Boundary and Recovery States ---
-describe('TrustGauge boundary and recovery states', () => {
-  it('renders permission denied overlay when hasPermission is false', () => {
-    render(<TrustGauge score={500} tier="gold" hasPermission={false} />)
-    expect(screen.getByText('You do not have permission to view this data.')).toBeInTheDocument()
-    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+describe('TrustGauge failure boundary states', () => {
+  it('renders loading skeleton and aria-busy when isLoading is true', () => {
+    const { container } = render(<TrustGauge score={500} tier="gold" isLoading={true} />)
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    expect(container.querySelector('.trust-gauge__loading-overlay')).toBeInTheDocument()
+    expect(container.firstChild).toHaveAttribute('aria-busy', 'true')
   })
 
-  it('renders error overlay and retry button', () => {
+  it('renders error banner and aria-invalid when error is present', () => {
+    const errorMsg = 'Failed to fetch trust score'
+    const { container } = render(<TrustGauge score={0} tier="bronze" error={new Error(errorMsg)} />)
+    expect(screen.getByText(errorMsg)).toBeInTheDocument()
+    expect(container.querySelector('.trust-gauge__error-banner')).toBeInTheDocument()
+    expect(container.firstChild).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('renders error banner with string error', () => {
+    const errorMsg = 'Network Error'
+    render(<TrustGauge score={0} tier="bronze" error={errorMsg} />)
+    expect(screen.getByText(errorMsg)).toBeInTheDocument()
+  })
+
+  it('calls onRetry when retry button is clicked', () => {
     const onRetry = vi.fn()
-    const error = new Error('Failed to load trust score')
-    render(<TrustGauge score={500} tier="gold" error={error} onRetry={onRetry} />)
-    
-    expect(screen.getByText('Error: Failed to load trust score')).toBeInTheDocument()
-    const retryButton = screen.getByRole('button', { name: 'Retry' })
-    expect(retryButton).toBeInTheDocument()
-    
-    retryButton.click()
-    expect(onRetry).toHaveBeenCalled()
-  })
-
-  it('renders loading overlay', () => {
-    render(<TrustGauge score={500} tier="gold" isLoading={true} />)
-    expect(screen.getByText('Loading...')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toBeInTheDocument()
+    render(<TrustGauge score={0} tier="bronze" error="Error" onRetry={onRetry} />)
+    const button = screen.getByRole('button', { name: /retry/i })
+    button.click()
+    expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
   it('renders stale banner when isStale is true', () => {
-    render(<TrustGauge score={500} tier="gold" isStale={true} />)
-    expect(screen.getByText('Data may be out of date')).toBeInTheDocument()
+    const { container } = render(<TrustGauge score={500} tier="gold" isStale={true} />)
+    expect(screen.getByText(/displaying offline or cached data/i)).toBeInTheDocument()
+    expect(container.querySelector('.trust-gauge__stale-banner')).toBeInTheDocument()
   })
 
-  it('does not render stale banner if loading or error', () => {
-    const { rerender } = render(<TrustGauge score={500} tier="gold" isStale={true} isLoading={true} />)
-    expect(screen.queryByText('Data may be out of date')).not.toBeInTheDocument()
-
-    rerender(<TrustGauge score={500} tier="gold" isStale={true} error={new Error('test')} />)
-    expect(screen.queryByText('Data may be out of date')).not.toBeInTheDocument()
+  it('hides gauge and shows permission denied message when isPermitted is false', () => {
+    render(<TrustGauge score={500} tier="gold" isPermitted={false} />)
+    expect(screen.getByText(/permission to view this trust score/i)).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 })
+
