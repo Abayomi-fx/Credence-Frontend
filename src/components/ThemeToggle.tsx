@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './ThemeToggle.css'
 
 // SunIcon renders the light-theme glyph. It is a pure, deterministic function of its props.
@@ -40,22 +40,98 @@ export function MoonIcon() {
 }
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('theme')
-      if (saved === 'light' || saved === 'dark') return saved
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-    }
-    return 'light'
-  })
+  const [theme, setTheme] = useState<Theme>(resolveTheme)
+  // Tracks whether the user has explicitly chosen a theme during this mount.
+  // While false, OS preference changes are honored; once true, they are ignored
+  // so an explicit choice is never silently overwritten.
+  const hasExplicitChoice = useRef(false)
+  // Guards against out-of-order / duplicate async writes from a rapid
+  // succession of toggles or OS events: only the latest commit is applied.
+  const writeGeneration = useRef(0)
 
+  // Single source of truth for applying a theme to the document and storage.
+  // Idempotent: repeated calls with the same theme are no-ops.
+  const commitTheme = useCallback((nextTheme: Theme) => {
+    const generation = ++writeGeneration.current
+    setTheme((prev) => {
+      if (prev === nextTheme) return prev
+      // Apply to the document only for the latest commited generation.
+      if (generation === writeGeneration.current) {
+        try {
+          document.documentElement.dataset.theme = nextTheme
+        } catch {
+          // DOM writes are best-effort; state remains consistent.
+        }
+        persistTheme(nextTheme)
+      }
+      return nextTheme
+    })
+  }, [])
+
+  // Keep the document in sync with the current theme on every commit.
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    localStorage.setItem('theme', theme)
+    try {
+      document.documentElement.dataset.theme = theme
+    } catch {
+      // ignore DOM availability failures
+    }
+    persistTheme(theme)
   }, [theme])
 
+  // React to OS preference changes only while no explicit choice exists.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return
+    }
+
+    let mql: MediaQueryList
+    try {
+      mql = window.matchMedia(DARK_QUERY)
+    } catch {
+      return
+    }
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      if (hasExplicitChoice.current) return
+      commitTheme(event.matches ? 'dark' : 'light')
+    }
+
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', handleChange)
+      return () => mql.removeEventListener('change', handleChange)
+    }
+
+    // Legacy Safari / fallback API.
+    if (typeof mql.addListener === 'function') {
+      mql.addListener(handleChange)
+      return () => mql.removeListener(handleChange)
+    }
+
+    return undefined
+  }, [commitTheme])
+
+  // External consumers (e.g. the Settings context) can request a theme
+  // change without duplicating the persistence / DOM invariants.
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handleExternal = (event: Event) => {
+      const detail = (event as CustomEvent<{ theme?: unknown }>).detail
+      const next = detail?.theme
+      if (!isValidTheme(next)) return
+      hasExplicitChoice.current = true
+      commitTheme(next)
+    }
+
+    window.addEventListener(THEME_CHANNEL_EVENT, handleExternal)
+    return () => window.removeEventListener(THEME_CHANNEL_EVENT, handleExternal)
+  }, [commitTheme])
+
   const toggleTheme = () => {
-    setTheme((t) => (t === 'light' ? 'dark' : 'light'))
+    hasExplicitChoice.current = true
+    commitTheme(theme === 'light' ? 'dark' : 'light')
   }
 
   const nextTheme = theme === 'light' ? 'dark' : 'light'
