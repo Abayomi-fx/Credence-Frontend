@@ -10,7 +10,7 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
   skipRateLimit?: boolean
   /** Declares decimal amount fields within the request JSON body. */
   amountFields?: ApiAmountFields
-/**
+  /**
    * When provided, the request is only dispatched if the active identity
    * epoch matches this value at call time **and** when the response arrives.
    * A mismatch at either point causes the promise to reject with
@@ -650,7 +650,7 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, amountFields, ...init } =
+  const { body, headers, idempotencyKey, skipRateLimit, amountFields, identityEpoch, ...init } =
     options
 
   // Exact-amount gate: validate and canonicalize declared amount fields
@@ -674,9 +674,6 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   }
 
   const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
-  // Pre-flight: deterministic, request-independent failures.
-  const url = buildUrl(path)
-const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
   const correlationId = generateCorrelationId('api-fetch')
   const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
