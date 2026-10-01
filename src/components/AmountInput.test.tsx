@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AmountInput from './AmountInput'
 
@@ -142,7 +142,7 @@ describe('AmountInput', () => {
         fireEvent.click(screen.getByRole('button', { name: /set max amount/i }))
         
         await screen.findByText('Failed to get max amount.')
-        const retryBtn = screen.getByRole('button', { name: 'Retry' })
+        const retryBtn = screen.getByRole('button', { name: /retry getting max amount/i })
         
         fireEvent.click(retryBtn)
         await screen.findByText('Max')
@@ -150,8 +150,8 @@ describe('AmountInput', () => {
       })
       
       it('prevents concurrent execution and uses latest result', async () => {
-        let resolve1: (v: number) => void
-        let resolve2: (v: number) => void
+        let resolve1!: (v: number) => void
+        let resolve2!: (v: number) => void
         const p1 = new Promise<number>(r => { resolve1 = r })
         const p2 = new Promise<number>(r => { resolve2 = r })
         
@@ -165,14 +165,26 @@ describe('AmountInput', () => {
         const { onChange } = renderInput({ balance: 100, onMaxRequest })
         const maxBtn = screen.getByRole('button', { name: /set max amount/i })
         
-        // first click
+        // The first click starts a request and blocks the button.
         fireEvent.click(maxBtn)
-        // btn is disabled, can't click normally, but we can force state change or bypass
-        // wait, since it's disabled, the user can't click again.
-        // Let's just ensure it goes into loading.
         expect(maxBtn).toBeDisabled()
-        resolve1!(100)
+
+        // Blurring the field supersedes that request, which releases the button
+        // and lets a second request go out. Overlapping requests are only
+        // reachable this way — the ref guard stops a plain double click.
+        fireEvent.blur(screen.getByRole('textbox'))
+        expect(maxBtn).toBeEnabled()
+        fireEvent.click(maxBtn)
+        expect(onMaxRequest).toHaveBeenCalledTimes(2)
+
+        // The newest request settles first; the superseded one arrives late and
+        // must be discarded rather than overwriting it.
+        await act(async () => { resolve2(200) })
+        await act(async () => { resolve1(100) })
+
         await screen.findByText('Max')
+        expect(onChange).toHaveBeenCalledTimes(1)
+        expect(onChange).toHaveBeenCalledWith('200.00')
       })
     })
   })
