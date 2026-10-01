@@ -152,91 +152,6 @@ function replaceControlCharacters(value: string): string {
   return result
 }
 
-/**
- * Normalizes the configured API base URL.
- *
- * Invariants (all enforced by the `normalizeBaseUrl` tests):
- *  1. The result is either `''` (same-origin, no prefix) or a base with **no
- *     trailing slash**, so joining a path always inserts exactly one separator.
- *  2. The result is never scheme-relative (`//host` or `/\host`) and never a
- *     non-`http(s)` URL, so {@link buildUrl} cannot be steered to a foreign
- *     origin by configuration.
- *  3. The result never carries a query string or fragment, because a path
- *     appended after `?`/`#` would be swallowed by the URL parser and the
- *     server would never see it.
- *  4. The function is idempotent: `normalizeBaseUrl(normalizeBaseUrl(x))`
- *     always equals `normalizeBaseUrl(x)`.
- *  5. Invalid or hostile values **fail closed** to `''` rather than throwing.
- *     A bad `.env` entry degrades the app to same-origin requests instead of
- *     breaking module evaluation (and therefore app boot).
- *
- * Rule 5 means a misconfigured `VITE_API_BASE_URL` cannot leak request URLs or
- * credentials to another host; it can only ever remove the prefix.
- *
- * Exported so the failure boundaries are directly testable. `import.meta.env`
- * is inlined at build time, so stubbing `VITE_API_BASE_URL` from a test cannot
- * reach the module-load path that computes {@link API_BASE_URL}.
- */
-export { normalizeBaseUrl }
-export function normalizeBaseUrl(value: string): string {
-  const trimmed = typeof value === 'string' ? value.trim() : ''
-  if (!trimmed || trimmed === '/') {
-    return ''
-  }
-
-  // `//host` and `/\host` are resolved by fetch as protocol-relative URLs, so
-  // keeping them would send every API request — including Authorization
-  // headers — to a foreign origin. Fail closed instead.
-  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
-    return rejectBaseUrl()
-  }
-
-  if (trimmed.startsWith('/')) {
-    if (trimmed.includes('?') || trimmed.includes('#')) {
-      return rejectBaseUrl()
-    }
-    return trimmed.replace(/\/+$/, '')
-  }
-
-  // Anything else must be an explicit absolute http(s) URL. This rejects
-  // scheme-less typos (`api.example.com`, which fetch would resolve as a
-  // same-origin *path* and silently 404) and dangerous schemes
-  // (`javascript:`, `data:`, `blob:`, `file:`).
-  if (!/^https?:\/\//i.test(trimmed)) {
-    return rejectBaseUrl()
-  }
-
-  let parsed: URL
-  try {
-    parsed = new URL(trimmed)
-  } catch {
-    return rejectBaseUrl()
-  }
-  if (parsed.search || parsed.hash) {
-    return rejectBaseUrl()
-  }
-
-  return trimmed.replace(/\/+$/, '')
-}
-
-/**
- * Reports an unusable `VITE_API_BASE_URL` and yields the same-origin fallback.
- *
- * The offending value is deliberately **not** echoed: a base URL may embed
- * credentials (`https://user:token@host`) and the value is already visible in
- * the operator's own `.env` file. Only the classification is logged.
- */
-function rejectBaseUrl(): '' {
-  if (IS_DEV) {
-    console.warn(
-      '[api] VITE_API_BASE_URL is not a supported API base. Expected an empty value, ' +
-        'a root-relative prefix (e.g. "/api"), or an absolute http(s) origin. ' +
-        'Falling back to same-origin requests.'
-    )
-  }
-  return ''
-}
-
 export const API_BASE_URL = normalizeBaseUrl(env?.VITE_API_BASE_URL || '/api')
 
 type ReplayEntry = {
@@ -329,6 +244,90 @@ export function apiRateLimiterSnapshot(): Readonly<{
  */
 export function resetApiRateLimiter(): void {
   defaultApiRateLimiter.reset()
+}
+
+/**
+ * Normalizes the configured API base URL.
+ *
+ * Invariants (all enforced by the `normalizeBaseUrl` tests):
+ *  1. The result is either `''` (same-origin, no prefix) or a base with **no
+ *     trailing slash**, so joining a path always inserts exactly one separator.
+ *  2. The result is never scheme-relative (`//host` or `/\host`) and never a
+ *     non-`http(s)` URL, so {@link buildUrl} cannot be steered to a foreign
+ *     origin by configuration.
+ *  3. The result never carries a query string or fragment, because a path
+ *     appended after `?`/`#` would be swallowed by the URL parser and the
+ *     server would never see it.
+ *  4. The function is idempotent: `normalizeBaseUrl(normalizeBaseUrl(x))`
+ *     always equals `normalizeBaseUrl(x)`.
+ *  5. Invalid or hostile values **fail closed** to `''` rather than throwing.
+ *     A bad `.env` entry degrades the app to same-origin requests instead of
+ *     breaking module evaluation (and therefore app boot).
+ *
+ * Rule 5 means a misconfigured `VITE_API_BASE_URL` cannot leak request URLs or
+ * credentials to another host; it can only ever remove the prefix.
+ *
+ * Exported so the failure boundaries are directly testable. `import.meta.env`
+ * is inlined at build time, so stubbing `VITE_API_BASE_URL` from a test cannot
+ * reach the module-load path that computes {@link API_BASE_URL}.
+ */
+export function normalizeBaseUrl(value: string): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed || trimmed === '/') {
+    return ''
+  }
+
+  // `//host` and `/\host` are resolved by fetch as protocol-relative URLs, so
+  // keeping them would send every API request — including Authorization
+  // headers — to a foreign origin. Fail closed instead.
+  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
+    return rejectBaseUrl()
+  }
+
+  if (trimmed.startsWith('/')) {
+    if (trimmed.includes('?') || trimmed.includes('#')) {
+      return rejectBaseUrl()
+    }
+    return trimmed.replace(/\/+$/, '')
+  }
+
+  // Anything else must be an explicit absolute http(s) URL. This rejects
+  // scheme-less typos (`api.example.com`, which fetch would resolve as a
+  // same-origin *path* and silently 404) and dangerous schemes
+  // (`javascript:`, `data:`, `blob:`, `file:`).
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return rejectBaseUrl()
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return rejectBaseUrl()
+  }
+  if (parsed.search || parsed.hash) {
+    return rejectBaseUrl()
+  }
+
+  return trimmed.replace(/\/+$/, '')
+}
+
+/**
+ * Reports an unusable `VITE_API_BASE_URL` and yields the same-origin fallback.
+ *
+ * The offending value is deliberately **not** echoed: a base URL may embed
+ * credentials (`https://user:token@host`) and the value is already visible in
+ * the operator's own `.env` file. Only the classification is logged.
+ */
+function rejectBaseUrl(): '' {
+  if (IS_DEV) {
+    console.warn(
+      '[api] VITE_API_BASE_URL is not a supported API base. Expected an empty value, ' +
+        'a root-relative prefix (e.g. "/api"), or an absolute http(s) origin. ' +
+        'Falling back to same-origin requests.'
+    )
+  }
+  return ''
 }
 
 /**
@@ -650,7 +649,7 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, headers, idempotencyKey, skipRateLimit, amountFields, identityEpoch, ...init } =
+  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, amountFields, ...init } =
     options
 
   // Exact-amount gate: validate and canonicalize declared amount fields
@@ -660,23 +659,22 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   const wireBody = applyAmountFields(body, amountFields)
   const hasJsonBody = isJsonBody(wireBody)
 
-  // Validate input size before expensive operations. Serializing an oversized
-  // body is wasted work and could exhaust memory or downstream resources.
-  let serializedBody: BodyInit | undefined
-  if (hasJsonBody) {
-    const serialized = JSON.stringify(wireBody)
-    if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BODY_BYTES) {
-      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serialized.length })
-    }
-    serializedBody = serialized
-  } else {
-    serializedBody = wireBody ?? undefined
-  }
-
-  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+  // Pre-flight: deterministic, request-independent failures.
+  const url = buildUrl(path)
   const correlationId = generateCorrelationId('api-fetch')
   const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
+  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+
+  // Validate input size before expensive operations. Serializing an oversized
+  // body is wasted work and could exhaust memory or downstream resources.
+  if (hasJsonBody) {
+    if (new TextEncoder().encode(serializedBody as string).byteLength > MAX_REQUEST_BODY_BYTES) {
+      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, {
+        bodySize: (serializedBody as string).length,
+      })
+    }
+  }
 
 export function setIdentityEpoch(epoch?: number): number {
   _identityEpoch = epoch ?? _identityEpoch + 1
