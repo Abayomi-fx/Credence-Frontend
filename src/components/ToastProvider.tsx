@@ -90,8 +90,13 @@ function normalizeToastMessage(message: unknown): string {
  *
  * The order of precedence is deterministic:
  * 1. An explicit per-toast `timeoutMs` option (0 means sticky).
- * 2. The global `autoDismiss` setting ('off' or `<s>`).
- * 3. The severity default from TOAST_CONFIG.
+ * 2. A sticky severity default (`0`, i.e. `danger`) stays sticky.
+ * 3. The global `autoDismiss` setting ('off' or `<s>`).
+ * 4. The severity default from TOAST_CONFIG.
+ *
+ * Rule 2 is what keeps critical alerts on screen: the global `autoDismiss`
+ * setting is a convenience for routine notices and must never silently
+ * resurrect an error toast the severity table marked as require-dismissal.
  *
  * Negative or non-finite values fall back to the severity default so a
  * malformed option cannot create an immediate-dismiss loop.
@@ -106,20 +111,24 @@ function resolveTimeout(
   // 1. Explicit per-toast option wins.
   if (options && Object.prototype.hasOwnProperty.call(options, 'timeoutMs')) {
     const raw = options.timeoutMs
-    if (typeof raw === 'number' && Number.finite(raw) && raw >= 0) {
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
       return Math.round(raw)
     }
     return defaultTimeout
   }
 
-  // 2. Global setting.
+  // 2. A severity configured as require-dismissal is never auto-dismissed by
+  // the global setting.
+  if (defaultTimeout <= 0) return 0
+
+  // 3. Global setting.
   if (autoDismiss === 'off') return 0
   if (typeof autoDismiss === 'string' && autoDismiss.endsWith('s')) {
     const seconds = Number(autoDismiss.slice(0, -1))
-    if (Number.finite(seconds) && seconds >= 0) return Math.round(seconds * 1000)
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000)
   }
 
-  // 3. Severity default.
+  // 4. Severity default.
   return defaultTimeout
 }
 
@@ -198,7 +207,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
       announcementTimerRef.current = setTimeout(() => {
         setAnnouncement('')
         announcementTimerRef.current = null
-      }, ANNOUNCEMENT_CLEAR_DELA)
+      }, ANNOUNCEMENT_CLEAR_DELAY)
     }
   }, [])
 
@@ -252,15 +261,14 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 
       const id = String(++idCounter.current)
       const newToast: ToastData = {
+        ...options,
+        // Options must not be able to override the provider-owned invariants
+        // (identity, severity, normalised message, resolved duration) -- that
+        // would break the duplicate/eviction/removal invariants.
         id,
         severity,
         message: normalizedMessage,
         durationMs: timeout > 0 ? timeout : 0,
-        ...options,
-        // Options must not be able to override the normalised message or the
-        // generated id -- that would break the duplicate/removal invariants.
-        message: normalizedMessage,
-        id,
       }
 
       // Enforce max toast limit: remove oldest if needed. The timeout map

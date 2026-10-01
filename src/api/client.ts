@@ -139,6 +139,9 @@ export function normalizeBaseUrl(value: string): string {
     return ''
   }
 
+  // `//host` and `/\host` are resolved by fetch as protocol-relative URLs, so
+  // keeping them would send every API request — including Authorization
+  // headers — to a foreign origin. Fail closed instead.
   if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
     return rejectBaseUrl()
   }
@@ -150,6 +153,10 @@ export function normalizeBaseUrl(value: string): string {
     return trimmed.replace(/\/+$/, '')
   }
 
+  // Anything else must be an explicit absolute http(s) URL. This rejects
+  // scheme-less typos (`api.example.com`, which fetch would resolve as a
+  // same-origin *path* and silently 404) and dangerous schemes
+  // (`javascript:`, `data:`, `blob:`, `file:`).
   if (!/^https?:\/\//i.test(trimmed)) {
     return rejectBaseUrl()
   }
@@ -477,8 +484,25 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, ...init } = options
-  const hasJsonBody = isJsonBody(body)
+  const {
+    body,
+    headers,
+    idempotencyKey,
+    skipRateLimit,
+    identityEpoch,
+    amountFields,
+    ...init
+  } = options
+
+  // Exact-amount gate: validate and canonicalize declared amount fields
+  // BEFORE any state change. An invalid amount must never consume
+  // rate-limit budget or reach the network, and must never mutate the
+  // caller's body object.
+  const wireBody = applyAmountFields(body, amountFields)
+  const hasJsonBody = isJsonBody(wireBody)
+
+  // Pre-flight: deterministic, request-independent failures.
+  const url = buildUrl(path)
 
   // Validate input size before expensive operations. Serializing an oversized
   // body is wasted work and could exhaust memory or downstream resources.
@@ -489,19 +513,18 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     }
   }
 
-export function advanceIdentityEpoch(): number {
-  _identityEpoch += 1
-  return _identityEpoch
-}
+  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+  const correlationId = generateCorrelationId('api-fetch')
+  const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
+  const method = (init.method || 'GET').toUpperCase()
 
 export function setIdentityEpoch(epoch?: number): number {
   _identityEpoch = epoch ?? _identityEpoch + 1
   return _identityEpoch
 }
 
-export function resetIdentityEpoch(): void {
-  _identityEpoch = 0
-}
+    const existing = replayEntries.get(normalizedKey)
+    const fingerprint = requestFingerprint(url, { ...init, method }, serializedBody, requestHeaders)
 
 const rateLimitOverrides = readApiRateLimitOverrides({
   VITE_API_RATE_LIMIT_MAX: env?.VITE_API_RATE_LIMIT_MAX,
@@ -515,16 +538,12 @@ export const defaultApiRateLimiter = new ApiRateLimiter({
   enabled: rateLimitOverrides.enabled ?? DEFAULT_API_RATE_LIMIT.enabled,
 })
 
-export function apiRateLimiterSnapshot(): Readonly<{
-  maxRequests: number
-  windowMs: number
-  enabled: boolean
-}> {
-  const cfg = defaultApiRateLimiter.config
-  return Object.freeze({
-    maxRequests: cfg.maxRequests,
-    windowMs: cfg.windowMs,
-    enabled: cfg.enabled,
+  return apiFetchWithoutReplay<T>(url, init, requestHeaders, serializedBody, {
+    correlationId,
+    path,
+    method,
+    skipRateLimit,
+    identityEpoch,
   })
 }
 
