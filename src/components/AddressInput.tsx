@@ -3,83 +3,14 @@ import { FormField } from './forms/FormField'
 import './AddressInput.css'
 import { useSettings } from '../context/SettingsContext'
 import {
-  isValidStellarAddress as validateStellarAddress,
+  isValidStellarAddress,
+  truncateAddress,
+  formatAddressForDisplay,
   sanitizeAddressInput,
-  type AddressSanitizationError,
+  type AddressDisplayMode,
 } from '../lib/stellar'
 
-export type FocusState = 'idle' | 'loading' | 'error' | 'stale' | 'permission'
-
-export interface AddressInputProps {
-  id: string
-  label?: string
-  value: string
-  onChange: (value: string) => void
-  onValidationChange?: (isValid: boolean) => void
-  onBlur?: (value: string) => Promise<void> | void
-  disabled?: boolean
-  /**
-   * Renders the field in a busy state and suppresses interaction while a
-   * read/resolve is in flight. Never masks the user's current value.
-   */
-  isLoading?: boolean
-  className?: string
-  error?: string
-  /**
-   * Optional callback invoked when a clipboard read fails (permission denied,
-   * unavailable API, empty clipboard, etc.) so callers can surface a
-   * diagnostic message.
-   */
-  onPasteError?: (error: unknown) => void
-  /**
-   * Optional focus callback. May be synchronous or return a Promise.
-   */
-  onFocus?: (event?: React.FocusEvent<HTMLInputElement>) => void | Promise<void>
-  /**
-   * Optional async request triggered on focus (e.g. address lookup, name resolution,
-   * or account authorization). If provided, focus transitions through deterministic
-   * loading, error, retry, stale, and permission states without losing user data.
-   */
-  onFocusRequest?: (address: string) => Promise<string | void>
-}
-
-/**
- * Validates Stellar public key format and checksum.
- * Valid addresses: 56 characters, starts with 'G', valid CRC-16 checksum.
- */
-export function isValidStellarAddress(address: string): boolean {
-  return validateStellarAddress(address)
-}
-
-/**
- * Truncates address for display: shows first 12 and last 8 characters.
- */
-export function truncateAddress(address: string): string {
-  if (address.length <= 20) return address
-  return `${address.substring(0, 12)}...${address.substring(address.length - 8)}`
-}
-
-export type AddressDisplayMode = 'full' | 'short' | 'friendly'
-
-/**
- * Formats an address for UI display based on the user's addressDisplay setting.
- *
- * Notes:
- * - `friendly` name resolution is not available yet. It falls back to `short`.
- * - This helper is intentionally pure and safe to call during render.
- */
-export function formatAddressForDisplay(address: string, mode: AddressDisplayMode): string {
-  switch (mode) {
-    case 'full':
-      return address
-    case 'friendly':
-      // TODO: Resolve friendly names when available on-chain.
-      return truncateAddress(address)
-    case 'short':
-    default:
-      return truncateAddress(address)
-  }
-}
+export { isValidStellarAddress, truncateAddress, formatAddressForDisplay, type AddressDisplayMode }
 
 /**
  * Internal component to handle prop injection from FormField
@@ -120,7 +51,7 @@ function AddressInputInner({
   const isLoading = focusState === 'loading'
   return (
     <div
-      className={`address-input-container ${focused ? 'address-input-container--focused' : ''} ${showError ? 'address-input-container--error' : ''} ${showSuccess ? 'address-input-container--success' : ''} ${isLoading ? 'address-input-container--loading' : ''}`}
+      className={`address-input-container ${focused ? 'address-input-container--focused' : ''} ${showError ? 'address-input-container--error' : ''} ${showSuccess ? 'address-input-container--success' : ''}`}
     >
       <input
         ref={inputRef}
@@ -171,6 +102,26 @@ function AddressInputInner({
   )
 }
 
+export interface AddressInputProps {
+  id: string
+  label?: string
+  value: string
+  onChange: (value: string) => void
+  onValidationChange?: (isValid: boolean) => void
+  disabled?: boolean
+  className?: string
+  /**
+   * External validation message (e.g. required-on-submit).
+   * Takes precedence over the built-in format error when provided.
+   */
+  error?: string
+  /**
+   * Optional callback invoked when a clipboard read fails (permission denied,
+   * unavailable API, etc.) so callers can surface a diagnostic message.
+   */
+  onPasteError?: (error: unknown) => void
+}
+
 export default function AddressInput({
   id,
   label = 'Stellar Address',
@@ -193,6 +144,7 @@ export default function AddressInput({
 
   const [focused, setFocused] = useState(false)
   const [attempted, setAttempted] = useState(false)
+  const [warning, setWarning] = useState<string | undefined>(undefined)
   // Tracks whether the last clipboard read failed so we can surface a
   // diagnostic message without losing the user's existing input.
   const [pasteFailed, setPasteFailed] = useState(false)
@@ -203,6 +155,7 @@ export default function AddressInput({
   const [focusErrorMsg, setFocusErrorMsg] = useState<string | null>(null)
   const focusRequestSeq = useRef(0)
 
+  const isRegexValid = /^G[A-Z0-9]{55}$/.test(value)
   const isValid = isValidStellarAddress(value)
   const isEmpty = !value
   const showError = attempted && !isValid && !isEmpty
@@ -217,14 +170,14 @@ export default function AddressInput({
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value
-    const result = sanitizeAddressInput(rawValue)
-    const nextVal = result.ok ? result.value : result.fallbackValue
-    onChange(nextVal)
+    const sanitized = sanitizeAddressInput(rawValue)
+    const cleanValue = sanitized.ok ? sanitized.value : sanitized.fallbackValue
+    onChange(cleanValue)
 
-    if (!result.ok) {
-      setSanitizationError(result.error)
+    if (!sanitized.ok) {
+      setWarning(sanitized.error.message)
     } else {
-      setSanitizationError(null)
+      setWarning(undefined)
     }
 
     // Mark as attempted if user starts typing
@@ -339,8 +292,27 @@ export default function AddressInput({
   const handlePaste = useCallback(async () => {
     try {
       const text = await navigator.clipboard.readText()
-      const trimmedText = text.trim()
+      const sanitized = sanitizeAddressInput(text)
+      const trimmedText = sanitized.ok ? sanitized.value : sanitized.fallbackValue
+
+      // Guard: if clipboard is empty or whitespace-only, do not
+      // clobber the user's existing input. Surface a non-destructive
+      // failure instead.
+      if (!trimmedText) {
+        setPasteFailed(true)
+        onPasteError?.(new Error('Clipboard is empty'))
+        if (inputRef.current) {
+          inputRef.current.focus()
+        }
+        return
+      }
+
       onChange(trimmedText)
+      if (!sanitized.ok) {
+        setWarning(sanitized.error.message)
+      } else {
+        setWarning(undefined)
+      }
       setAttempted(true)
       setPasteFailed(false)
 
@@ -359,33 +331,26 @@ export default function AddressInput({
     }
   }, [acceptSanitizedValue, onPasteError])
 
-  const isChecksumError = showError && /^G[A-Z0-9]{55}$/.test(value)
-  const formatError = showError
-    ? isChecksumError
-      ? 'Invalid address checksum. Please verify the address.'
-      : 'Invalid address. Stellar public keys are 56 characters starting with G.'
-    : undefined
+  let formatError: string | undefined
+  if (showError) {
+    if (isRegexValid && !isValid) {
+      formatError = 'Invalid address checksum. Please verify the address.'
+    } else {
+      formatError = 'Invalid address. Stellar public keys are 56 characters starting with G.'
+    }
+  }
 
-  const showFocusError =
-    focusState === 'error' || focusState === 'stale' || focusState === 'permission'
-  const focusErrorMessage =
-    focusState === 'permission'
-      ? 'Permission denied focusing address.'
-      : focusState === 'stale'
-        ? 'Address data is stale.'
-        : focusState === 'error'
-          ? focusErrorMsg || 'Failed to resolve address on focus.'
-          : undefined
-
-  // External error takes precedence; otherwise fall back to sanitization,
-  // then format error, then to a non-destructive paste failure message.
+  // External error takes precedence; otherwise fall back to warning,
+  // then to the format error, then to a non-destructive paste failure message.
   const error =
     externalError ??
-    (sanitizationError ? sanitizationError.message : undefined) ??
+    warning ??
     formatError ??
     (pasteFailed ? 'Unable to read clipboard. Please paste manually.' : undefined)
   const hint = 'Stellar public key format (56 characters, starts with G)'
-  const successMessage = !externalError && showSuccess ? 'Valid Stellar address' : undefined
+  // Visual + FormField success only when format is valid and no external error.
+  const successMessage =
+    !externalError && !warning && showSuccess ? 'Valid Stellar address' : undefined
 
   return (
     <div className={`address-input-wrapper ${className}`}>
@@ -426,23 +391,8 @@ export default function AddressInput({
         </div>
       )}
 
-      {/* Focus error boundary banner with retry button */}
-      {showFocusError && (
-        <div id={`${id}-focus-error`} className="address-input-focus-error" role="alert">
-          <span className="address-input-focus-error-message">{focusErrorMessage}</span>
-          <button
-            type="button"
-            onClick={() => void executeFocus()}
-            className="address-input-retry-button"
-            aria-label="Retry focus request"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* Address echo display when valid and no external error */}
-      {showSuccess && !externalError && value && (
+      {/* Address echo display when valid */}
+      {!externalError && !warning && showSuccess && value && (
         <div className="address-input-echo">
           <span className="address-input-echo-label">Recognized:</span>
           <code className="address-input-echo-value">

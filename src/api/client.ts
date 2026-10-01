@@ -18,6 +18,12 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
 }
 
 export type ApiErrorCode = 'invalid_request_url' | 'network_error' | 'http_error'
+/**
+ * Declaration of decimal amount fields for a request body.
+ *
+ * - `string[]`: field names validated with the default USDC rules.
+ * - `Record<string, AmountRules | true>`: per-field rules (`true` = defaults).
+ */
 export type ApiAmountFields = string[] | Record<string, AmountRules | true>
 export type ApiAmountErrorCode = AmountErrorCode | 'INVALID_BODY' | 'MISSING'
 
@@ -124,26 +130,6 @@ function rejectBaseUrl(): '' {
   return ''
 }
 
-export function normalizeBaseUrl(value: string): string {
-  const trimmed = typeof value === 'string' ? value.trim() : ''
-  if (!trimmed || trimmed === '/') return ''
-  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) return rejectBaseUrl()
-  if (trimmed.startsWith('/')) {
-    if (trimmed.includes('?') || trimmed.includes('#')) return rejectBaseUrl()
-    return trimmed.replace(/\/+$/, '')
-  }
-  if (!/^https?:\/\//i.test(trimmed)) return rejectBaseUrl()
-  try {
-    const parsed = new URL(trimmed)
-    if (parsed.search || parsed.hash) return rejectBaseUrl()
-    return trimmed.replace(/\/+$/, '')
-  } catch {
-    return rejectBaseUrl()
-  }
-}
-
-export const API_BASE_URL = normalizeBaseUrl(env?.VITE_API_BASE_URL || '/api')
-
 type ReplayEntry = {
   fingerprint: string
   promise: Promise<unknown>
@@ -195,6 +181,88 @@ export function resetApiRateLimiter(): void {
   defaultApiRateLimiter.reset()
 }
 
+export function normalizeBaseUrl(value: string): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed || trimmed === '/') {
+    return ''
+  }
+
+  // `//host` and `/\host` are resolved by fetch as protocol-relative URLs, so
+  // keeping them would send every API request — including Authorization
+  // headers — to a foreign origin. Fail closed instead.
+  if (trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
+    return rejectBaseUrl()
+  }
+
+  if (trimmed.startsWith('/')) {
+    if (trimmed.includes('?') || trimmed.includes('#')) {
+      return rejectBaseUrl()
+    }
+    return trimmed.replace(/\/+$/, '')
+  }
+
+  // Anything else must be an explicit absolute http(s) URL. This rejects
+  // scheme-less typos (`api.example.com`, which fetch would resolve as a
+  // same-origin *path* and silently 404) and dangerous schemes
+  // (`javascript:`, `data:`, `blob:`, `file:`).
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return rejectBaseUrl()
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return rejectBaseUrl()
+  }
+  if (parsed.search || parsed.hash) {
+    return rejectBaseUrl()
+  }
+
+  return trimmed.replace(/\/+$/, '')
+}
+
+/**
+ * Reports an unusable `VITE_API_BASE_URL` and yields the same-origin fallback.
+ *
+ * The offending value is deliberately **not** echoed: a base URL may embed
+ * credentials (`https://user:token@host`) and the value is already visible in
+ * the operator's own `.env` file. Only the classification is logged.
+ */
+function rejectBaseUrl(): '' {
+  if (IS_DEV) {
+    console.warn(
+      '[api] VITE_API_BASE_URL is not a supported API base. Expected an empty value, ' +
+        'a root-relative prefix (e.g. "/api"), or an absolute http(s) origin. ' +
+        'Falling back to same-origin requests.'
+    )
+  }
+  return ''
+}
+
+/**
+ * Builds the redacted, length-bounded path echoed in `ApiError.payload`.
+ *
+ * Strips the query string so bearer tokens, signatures, and user-supplied
+ * identifiers never reach logs, telemetry, or the `ErrorState` UI. Control
+ * characters are replaced with `?` so the value cannot smuggle newlines into a
+ * log line.
+ */
+function redactPathForDiagnostics(value: unknown): string {
+  if (typeof value !== 'string') {
+    return typeof value
+  }
+  const queryStart = value.indexOf('?')
+  const pathOnly = queryStart === -1 ? value : value.slice(0, queryStart)
+  const printable = replaceControlCharacters(pathOnly)
+  const clipped =
+    printable.length > DIAGNOSTIC_PATH_MAX_LENGTH
+      ? `${printable.slice(0, DIAGNOSTIC_PATH_MAX_LENGTH)}…`
+      : printable
+  return queryStart === -1 ? clipped : `${clipped}?<redacted>`
+}
+
+/** Reasons reported by {@link normalizeApiPath}; each is a stable string. */
 type PathRejection =
   | 'path must be a string'
   | 'path must not be empty'
@@ -300,7 +368,11 @@ function applyAmountFields(
   return wireBody
 }
 
-function buildHeaders(headers: HeadersInit | undefined, hasJsonBody: boolean, correlationId?: string): Headers {
+function buildHeaders(
+  headers: HeadersInit | undefined,
+  hasJsonBody: boolean,
+  correlationId?: string
+): Headers {
   const nextHeaders = new Headers(headers)
   if (!nextHeaders.has('Accept')) nextHeaders.set('Accept', 'application/json')
   if (hasJsonBody && !nextHeaders.has('Content-Type')) {
@@ -369,8 +441,91 @@ function replayConflict(key: string): ApiError {
   })
 }
 
-export function resetApiRateLimiter(): void {
-  defaultApiRateLimiter.reset()
+/**
+ * Issues a JSON API request and returns the parsed body.
+ *
+ * Failure taxonomy — every rejection carries an {@link ApiError} that says
+ * *which* stage failed, so callers can distinguish a retryable network blip
+ * from a non-retryable programming fault:
+ *
+ * | Stage                       | `status` | `code`                 | Retryable |
+ * | --------------------------- | -------- | ---------------------- | --------- |
+ * | URL/path validation         | `0`      | `invalid_request_url`  | no        |
+ * | transport (offline, CORS)   | `0`      | `network_error`        | yes       |
+ * | non-2xx response            | status   | `http_error`           | per status |
+ * | caller aborted via `signal` | —        | rethrown `AbortError`  | n/a       |
+ *
+ * `buildUrl`, header construction, and body serialization all run *before* the
+ * network `try` block. A caller mistake is therefore never re-wrapped as
+ * `status: 0` / `network_error`, which previously hid the real cause and could
+ * make a permanent fault look like a transient one worth retrying.
+ */
+export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  const { body, headers, idempotencyKey, skipRateLimit, amountFields, identityEpoch, ...init } =
+    options
+
+  // Exact-amount gate: validate and canonicalize declared amount fields
+  // BEFORE any state change. An invalid amount must never consume
+  // rate-limit budget or reach the network, and must never mutate the
+  // caller's body object.
+  const wireBody = applyAmountFields(body, amountFields)
+  const hasJsonBody = isJsonBody(wireBody)
+
+  // Pre-flight: deterministic, request-independent failures.
+  const url = buildUrl(path)
+  const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
+  if (hasJsonBody && typeof serializedBody === 'string') {
+    if (new TextEncoder().encode(serializedBody).byteLength > MAX_REQUEST_BODY_BYTES) {
+      throw new ApiBodyTooLargeError(MAX_REQUEST_BODY_BYTES, { bodySize: serializedBody.length })
+    }
+  }
+
+  const correlationId = generateCorrelationId('api-fetch')
+  const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
+  const method = (init.method || 'GET').toUpperCase()
+
+  if (idempotencyKey !== undefined) {
+    const normalizedKey = idempotencyKey.trim()
+    if (!normalizedKey) {
+      throw new ApiError(400, 'Idempotency key must not be empty', {
+        code: 'invalid_idempotency_key',
+      })
+    }
+
+    const existing = replayEntries.get(normalizedKey)
+    const fingerprint = requestFingerprint(url, { ...init, method }, serializedBody, requestHeaders)
+
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw replayConflict(normalizedKey)
+      }
+      return existing.promise as Promise<T>
+    }
+
+    requestHeaders.set('Idempotency-Key', normalizedKey)
+    const requestPromise = apiFetchWithoutReplay<T>(url, init, requestHeaders, serializedBody, {
+      correlationId,
+      path,
+      method,
+      skipRateLimit,
+      identityEpoch,
+    })
+    replayEntries.set(normalizedKey, { fingerprint, promise: requestPromise })
+    requestPromise.catch(() => {
+      if (replayEntries.get(normalizedKey)?.promise === requestPromise) {
+        replayEntries.delete(normalizedKey)
+      }
+    })
+    return requestPromise
+  }
+
+  return apiFetchWithoutReplay<T>(url, init, requestHeaders, serializedBody, {
+    correlationId,
+    path,
+    method,
+    skipRateLimit,
+    identityEpoch,
+  })
 }
 
 interface ApiFetchContext {

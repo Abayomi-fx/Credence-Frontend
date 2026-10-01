@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import './Badge.css'
 import TooltipOnOverflow from './TooltipOnOverflow'
 import { Component, type ReactNode, type ErrorInfo } from 'react'
@@ -204,32 +203,15 @@ export default function Badge({ variant, label, className = '', srPrefix, ariaLa
     sanitizedLabel ||
     (normalizedVariant === 'unknown' ? DEFAULT_LABELS.unknown : DEFAULT_LABELS[normalizedVariant])
 
-  // Accessible label with sanitized fallback
-  const accessibleLabel = sanitizedAriaLabel || displayLabel
-
-  // Build safe CSS class string
-  // Ensures no empty spaces at boundaries even if sanitizedClassName is empty
-  const badgeClasses = `badge badge--${normalizedVariant}${
-    sanitizedClassName ? ` ${sanitizedClassName}` : ''
-  }`
-
-  // Add title attribute for tooltip compatibility (only for unknown variants)
-  const titleAttr =
-    normalizedVariant === 'unknown' && variantString !== 'unknown' ? undefined : displayLabel
-
-  // Render the badge element (fallback if tooltip fails)
-  const badgeElement = (
-    <span className={badgeClasses} aria-label={accessibleLabel} title={titleAttr}>
-      {sanitizedSrPrefix && <span className="sr-only">{sanitizedSrPrefix} </span>}
-      {displayLabel}
-    </span>
-  )
-
-  // Wrap with TooltipOnOverflow, with error boundary fallback
-  // If tooltip fails, render plain badge without enhancement
   return (
-    <BadgeTooltipBoundary fallback={badgeElement}>
-      <TooltipOnOverflow content={displayLabel}>{badgeElement}</TooltipOnOverflow>
-    </BadgeTooltipBoundary>
+    <TooltipOnOverflow content={displayLabel}>
+      <span
+        className={`badge badge--${normalizedVariant} ${className}`.trim()}
+        aria-label={accessibleLabel}
+      >
+        {srPrefix && <span className="sr-only">{srPrefix} </span>}
+        {displayLabel}
+      </span>
+    </TooltipOnOverflow>
   )
 }
