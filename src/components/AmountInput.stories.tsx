@@ -71,3 +71,109 @@ export const BelowMin: Story = {
     return <AmountInput {...args} value={value} onChange={setValue} />;
   },
 };
+
+/**
+ * Boundary and recovery coverage for the amount state machine.
+ * These stories keep the entered value visible while exercising the same
+ * failure paths used by the Max request in production.
+ */
+export const EmptyBoundary: Story = {
+  name: 'Boundary – empty amount',
+  args: {
+    value: '',
+  },
+}
+
+export const ExactBalanceBoundary: Story = {
+  name: 'Boundary – exact balance',
+  args: {
+    value: '1000.00',
+    balance: 1000,
+  },
+}
+
+export const MinimumBoundary: Story = {
+  name: 'Boundary – minimum amount',
+  args: {
+    value: '10.00',
+    min: 10,
+  },
+}
+
+export const OverBalanceBoundary: Story = {
+  name: 'Boundary – over balance',
+  args: {
+    value: '1000.01',
+    balance: 1000,
+  },
+}
+
+export const LoadingRecovery: Story = {
+  name: 'Recovery – loading to success',
+  render: function LoadingRecoveryStory(args) {
+    const [value, setValue] = React.useState(args.value)
+    const [loading, setLoading] = React.useState(true)
+
+    React.useEffect(() => {
+      const timer = window.setTimeout(() => setLoading(false), 900)
+      return () => window.clearTimeout(timer)
+    }, [])
+
+    return <AmountInput {...args} value={value} onChange={setValue} isLoading={loading} />
+  },
+  args: {
+    value: '',
+  },
+}
+
+export const RetryAfterFailure: Story = {
+  name: 'Recovery – retry after failure',
+  render: function RetryAfterFailureStory(args) {
+    const [value, setValue] = React.useState(args.value)
+    const attempts = React.useRef(0)
+
+    const onMaxRequest = React.useCallback(async () => {
+      attempts.current += 1
+      await new Promise((resolve) => window.setTimeout(resolve, 350))
+      if (attempts.current === 1) throw new Error('Temporary balance service failure')
+      return 750
+    }, [])
+
+    return (
+      <AmountInput
+        {...args}
+        value={value}
+        onChange={setValue}
+        onMaxRequest={onMaxRequest}
+      />
+    )
+  },
+  args: {
+    value: '',
+    balance: 1000,
+  },
+}
+
+export const PermissionDenied: Story = {
+  name: 'Recovery – permission denied',
+  args: {
+    value: '250.00',
+    onMaxRequest: async () => {
+      const error = new Error('Wallet permission denied')
+      error.name = 'PermissionError'
+      throw error
+    },
+  },
+}
+
+export const StaleBalance: Story = {
+  name: 'Recovery – stale balance',
+  args: {
+    value: '250.00',
+    onMaxRequest: async () => {
+      const error = new Error('Balance data is stale')
+      error.name = 'StaleDataError'
+      throw error
+    },
+  },
+}
