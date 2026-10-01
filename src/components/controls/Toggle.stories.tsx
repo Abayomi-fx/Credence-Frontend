@@ -25,6 +25,7 @@ const meta: Meta<typeof Toggle> = {
       control: 'text',
       description: 'Validation message. Forces aria-invalid and is announced via role="alert".',
     },
+    onRetry: { action: 'retried' },
   },
   args: {
     checked: false,
@@ -102,6 +103,14 @@ export const DisabledWhileOn: Story = {
   },
 }
 
+export const DisabledWithReason: Story = {
+  args: {
+    checked: false,
+    disabled: true,
+    disabledReason: 'Ask an admin to enable advanced settlement',
+  },
+}
+
 /* ─── In-flight write ───────────────────────────────────────────────────── */
 
 export const Loading: Story = {
@@ -132,6 +141,13 @@ export const LoadingWhileDisabled: Story = {
     checked: false,
     isLoading: true,
     disabled: true,
+  },
+}
+
+export const Stale: Story = {
+  args: {
+    checked: true,
+    isStale: true,
   },
 }
 
@@ -289,4 +305,12 @@ export function RetryAfterErrorHarness({
 
 export const RetryAfterError: Story = {
   render: () => <RetryAfterErrorHarness />,
+}
+
+export const RetryableError: Story = {
+  args: {
+    checked: false,
+    error: 'Could not save your setting',
+    onRetry: () => {},
+  },
 }
