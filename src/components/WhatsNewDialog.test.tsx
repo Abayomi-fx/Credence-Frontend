@@ -191,6 +191,72 @@ describe('WhatsNewDialog / ChangelogDrawer', () => {
     expect(newTags.length).toBeGreaterThan(0)
   })
 
+  it('renders stale data when isLoading is true but updates are present', () => {
+    vi.mocked(useProductUpdatesModule.useProductUpdates).mockReturnValue({
+      updates: PRODUCT_UPDATES,
+      unreadCount: 0,
+      isLoading: true,
+      error: null,
+      markAllRead: mockMarkAllRead,
+      refetch: mockRefetch,
+    })
+    render(<WhatsNewDialog open={true} onClose={() => undefined} />)
+    const list = screen.getByRole('list', { name: /recent product updates/i })
+    expect(list).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('renders stale data when error is present but updates exist', () => {
+    vi.mocked(useProductUpdatesModule.useProductUpdates).mockReturnValue({
+      updates: PRODUCT_UPDATES,
+      unreadCount: 0,
+      isLoading: false,
+      error: 'Network Error',
+      markAllRead: mockMarkAllRead,
+      refetch: mockRefetch,
+    })
+    render(<WhatsNewDialog open={true} onClose={() => undefined} />)
+    const list = screen.getByRole('list', { name: /recent product updates/i })
+    expect(list).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('handles invalid or missing dates gracefully', () => {
+    const badDateUpdates = [
+      { ...PRODUCT_UPDATES[0], id: 'bad-1', date: 'invalid-date-string' },
+      { ...PRODUCT_UPDATES[0], id: 'bad-2', date: '' }
+    ]
+    vi.mocked(useProductUpdatesModule.useProductUpdates).mockReturnValue({
+      updates: badDateUpdates,
+      unreadCount: 0,
+      isLoading: false,
+      error: null,
+      markAllRead: mockMarkAllRead,
+      refetch: mockRefetch,
+    })
+    render(<WhatsNewDialog open={true} onClose={() => undefined} />)
+    expect(screen.getByText('invalid-date-string')).toBeInTheDocument()
+    expect(screen.getByText('Unknown Date')).toBeInTheDocument()
+  })
+
+  it('renders correctly when updates contain duplicate IDs', () => {
+    const duplicateUpdates = [
+      PRODUCT_UPDATES[0],
+      PRODUCT_UPDATES[0]
+    ]
+    vi.mocked(useProductUpdatesModule.useProductUpdates).mockReturnValue({
+      updates: duplicateUpdates,
+      unreadCount: 0,
+      isLoading: false,
+      error: null,
+      markAllRead: mockMarkAllRead,
+      refetch: mockRefetch,
+    })
+    render(<WhatsNewDialog open={true} onClose={() => undefined} />)
+    const list = screen.getByRole('list', { name: /recent product updates/i })
+    expect(list.querySelectorAll('li')).toHaveLength(2)
+  })
+
   it('renders unread badge when unreadCount > 0', () => {
     setMockUpdates(2)
     render(<WhatsNewDialog open={true} onClose={() => undefined} />)

@@ -25,13 +25,21 @@ const TAG_LABELS: Record<ProductUpdate['tag'], string> = {
 }
 
 function formatDate(isoDate: string): string {
-  const date = new Date(`${isoDate}T00:00:00Z`)
-  return date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'UTC',
-  })
+  try {
+    if (!isoDate) return 'Unknown Date'
+    const date = new Date(`${isoDate}T00:00:00Z`)
+    if (Number.isNaN(date.getTime())) {
+      return isoDate
+    }
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'UTC',
+    })
+  } catch {
+    return isoDate || 'Unknown Date'
+  }
 }
 
 /**
@@ -123,7 +131,7 @@ export default function WhatsNewDialog({ open, onClose, returnFocusRef }: WhatsN
             items={updates}
             itemHeight={118}
             containerHeight={420}
-            getItemKey={(update) => update.id}
+            getItemKey={(update, index) => `${update.id}-${index}`}
             renderItem={(update) => (
               <li className="whats-new-dialog__item">
                 <div className="whats-new-dialog__item-meta">
