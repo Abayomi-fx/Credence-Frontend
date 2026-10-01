@@ -10,7 +10,17 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
   skipRateLimit?: boolean
   /** Declares decimal amount fields within the request JSON body. */
   amountFields?: ApiAmountFields
-  /** Identity epoch captured at the moment the caller reads the identity it intends to act on. */
+/**
+   * When provided, the request is only dispatched if the active identity
+   * epoch matches this value at call time **and** when the response arrives.
+   * A mismatch at either point causes the promise to reject with
+   * {@link ApiSessionConflictError}, leaving no partial state.
+   *
+   * Pass the epoch obtained from {@link getIdentityEpoch} at the moment the
+   * caller reads the identity it intends to act on. The client advances the
+   * epoch automatically on every {@link setIdentityEpoch} call (disconnect,
+   * reconnect, expiry).
+   */
   identityEpoch?: number
 }
 
@@ -561,7 +571,7 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, amountFields, ...init } =
+const { body, headers, idempotencyKey, skipRateLimit, amountFields, identityEpoch, ...init } =
     options
 
   // Exact-amount gate: validate and canonicalize declared amount fields
@@ -571,7 +581,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   const wireBody = applyAmountFields(body, amountFields)
   const hasJsonBody = isJsonBody(wireBody)
 const correlationId = generateCorrelationId('api-fetch')
-  const { idempotencyKey, identityEpoch } = options
+  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, ...init } = options
+  const hasJsonBody = isJsonBody(body)
 
   // Pre-flight: deterministic, request-independent failures.
   const url = buildUrl(path)
