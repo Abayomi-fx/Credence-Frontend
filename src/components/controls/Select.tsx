@@ -41,15 +41,17 @@ export default function Select({
         aria-describedby={ariaDescribedBy}
         aria-required={ariaRequired}
         disabled={isDisabled}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          // The native `disabled` attribute blocks pointer and keyboard input,
+          // but a synthetic change event (form reset replay, programmatic
+          // dispatch, some screen readers) can still reach this handler. Guard
+          // so a disabled or loading control can never emit a selection.
+          if (isDisabled) return
+          onChange(e.target.value)
+        }}
       >
-        {options.map((o, index) => (
-          // Index is part of the key because `value` is caller-supplied and not
-          // guaranteed unique: keying on `value` alone makes React warn and leaves
-          // reconciliation of duplicate options explicitly unsupported. Pairing the
-          // index keeps every rendered option a distinct, stable-identity node
-          // without changing the public interface or the option order.
-          <option key={`${index}:${o.value}`} value={o.value}>
+        {options.map((o, i) => (
+          <option key={`${o.value}::${i}`} value={o.value}>
             {o.label}
           </option>
         ))}

@@ -266,6 +266,7 @@ export function resetApiRateLimiter(): void {
   defaultApiRateLimiter.reset()
 }
 
+
 /**
  * Reports an unusable `VITE_API_BASE_URL` and yields the same-origin fallback.
  *
@@ -484,15 +485,8 @@ function replayConflict(key: string): ApiError {
  * make a permanent fault look like a transient one worth retrying.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const {
-    body,
-    headers,
-    idempotencyKey,
-    skipRateLimit,
-    identityEpoch,
-    amountFields,
-    ...init
-  } = options
+  const { body, headers, idempotencyKey, skipRateLimit, identityEpoch, amountFields, ...init } =
+    options
 
   // Exact-amount gate: validate and canonicalize declared amount fields
   // BEFORE any state change. An invalid amount must never consume
@@ -500,10 +494,11 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   // caller's body object.
   const wireBody = applyAmountFields(body, amountFields)
   const hasJsonBody = isJsonBody(wireBody)
+  const correlationId = generateCorrelationId('api-fetch')
 
   // Pre-flight: deterministic, request-independent failures.
   const url = buildUrl(path)
-
+  const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   // Validate input size before expensive operations. Serializing an oversized
   // body is wasted work and could exhaust memory or downstream resources.
   if (hasJsonBody) {
@@ -514,8 +509,6 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   }
 
   const serializedBody = hasJsonBody ? JSON.stringify(wireBody) : (wireBody ?? undefined)
-  const correlationId = generateCorrelationId('api-fetch')
-  const requestHeaders = buildHeaders(headers, hasJsonBody, correlationId)
   const method = (init.method || 'GET').toUpperCase()
 
 export function setIdentityEpoch(epoch?: number): number {
